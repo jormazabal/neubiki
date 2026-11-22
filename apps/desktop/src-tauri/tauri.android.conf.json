@@ -1,0 +1,18 @@
+{
+  "identifier": "io.github.jormazabal.neubiki.mobile",
+  "build": {
+    "beforeBuildCommand": "pnpm build && node ../../scripts/check-client-bundle-clean.mjs dist"
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "android": {
+      "minSdkVersion": 29
+    },
+    "createUpdaterArtifacts": false,
+    "externalBin": [],
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

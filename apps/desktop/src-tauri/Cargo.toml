@@ -1,0 +1,56 @@
+[package]
+name = "neubiki-desktop"
+version = "0.7.0"
+description = "Neubiki desktop application"
+authors = ["Neubiki contributors"]
+license = "Apache-2.0"
+repository = "https://example.invalid/neubiki"
+edition = "2021"
+
+[workspace]
+members = [
+  ".",
+  "crates/neubiki-ai",
+  "crates/neubiki-ai-skills",
+  "crates/neubiki-core",
+  "crates/neubiki-drawing",
+  "crates/neubiki-docs",
+  "crates/neubiki-research",
+  "crates/neubiki-recording",
+  "crates/neubiki-storage",
+  "crates/neubiki-sync-folder",
+  "crates/neubiki-proton",
+]
+resolver = "2"
+
+[lib]
+name = "neubiki_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+time = { version = "0.3", features = ["formatting"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+neubiki-core = { path = "crates/neubiki-core" }
+neubiki-storage = { path = "crates/neubiki-storage" }
+neubiki-recording = { path = "crates/neubiki-recording" }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "=2.5.1"
+tauri-plugin-single-instance = "=2.3.7"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

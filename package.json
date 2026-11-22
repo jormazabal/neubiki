@@ -1,0 +1,33 @@
+{
+  "name": "neubiki",
+  "private": true,
+  "version": "0.7.0",
+  "description": "Neubiki for Markdown projects on Proton Drive.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.0.8",
+  "scripts": {
+    "dev": "pnpm --filter @neubiki/desktop dev",
+    "tauri": "pnpm --filter @neubiki/desktop exec tauri",
+    "desktop": "pnpm --filter @neubiki/desktop tauri:dev",
+    "android:init": "pnpm --filter @neubiki/desktop tauri:android:init",
+    "android:dev": "pnpm --filter @neubiki/desktop tauri:android:dev",
+    "android:build": "pnpm --filter @neubiki/desktop tauri:android:build",
+    "android:build:debug": "node scripts/build-android-debug.mjs",
+    "android:build:release": "node scripts/build-android-release.mjs",
+    "android:run": "pnpm --filter @neubiki/desktop tauri:android:run",
+    "build": "pnpm --filter @neubiki/desktop build",
+    "bundle:check-clean": "node scripts/check-client-bundle-clean.mjs",
+    "bundle:measure-load": "node scripts/measure-frontend-load.mjs",
+    "test": "pnpm --filter @neubiki/desktop test",
+    "rust:check": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "rust:test": "node --test scripts/test-native.test.mjs && node scripts/test-native.mjs",
+    "version:check": "node scripts/check-version.mjs",
+    "release:secrets:check": "node scripts/check-release-secrets.mjs",
+    "release:check": "node scripts/release-validation.mjs"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

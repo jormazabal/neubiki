@@ -1,0 +1,11 @@
+import type {CSSProperties} from "react";
+import {createDeferredView} from "../../components/ui/createDeferredView";
+
+type ReadonlyMarkdownViewerProps={markdown:string;ariaLabel:string;emptyMessage:string;zoomPercent?:number;resolveImageSource?:(source:string)=>string};
+const ReadonlyMilkdown=createDeferredView<{markdown:string;zoomPercent:number;resolveImageSource?:(source:string)=>string}>(()=>import("./ReadonlyMilkdown").then(module=>({default:module.ReadonlyMilkdownView})),"Preparando vista previa…","No se pudo cargar la vista previa. El documento se conserva.");
+
+export function ReadonlyMarkdownViewer({markdown,ariaLabel,emptyMessage,zoomPercent=100,resolveImageSource}:ReadonlyMarkdownViewerProps){
+  return <article aria-label={ariaLabel} data-testid="readonly-markdown-viewer">
+    {markdown.trim().length>0?<ReadonlyMilkdown markdown={markdown} zoomPercent={zoomPercent} resolveImageSource={resolveImageSource}/>:<div className="neubiki-editor" style={{"--neubiki-markdown-zoom":String(zoomPercent/100)} as CSSProperties}><p className="text-[13px] text-ink-secondary">{emptyMessage}</p></div>}
+  </article>;
+}

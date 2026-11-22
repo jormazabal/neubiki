@@ -1,0 +1,15 @@
+# Compilaciones y distribución
+
+`VERSION` es la fuente de la versión. Alinea los manifiestos y ejecuta `pnpm version:check`. Los identificadores de instalación son `io.github.jormazabal.neubiki.desktop` y `io.github.jormazabal.neubiki.mobile`.
+
+- **Candidato local.** Prepara el conector nativo de Proton, compila el MSI y el instalador NSIS para Windows x64, y genera el APK firmado para Android ARM64 con API mínima 29. El candidato no consulta canales de actualización. Registra los hashes SHA-256, la firma, la ABI del APK y las pruebas realizadas. La aceptación requiere instalar y comprobar el flujo remoto en cada plataforma.
+- **Distribución pública.** Requiere repositorio y canales propios operativos, autorización para publicar y firmas de Neubiki. Configura la clave pública del actualizador Windows y el endpoint de `latest.json`; configura el endpoint Android de `android-latest.json` y una firma Android propia que se mantenga en actualizaciones posteriores. Conserva el código de actualización WiX entre versiones de Neubiki. Valida los recursos y avisos requeridos para distribuir el conector.
+- **Verificación pública.** Prepara un borrador con MSI, NSIS, las firmas del actualizador Windows, APK y ambos manifiestos. Comprueba que Windows prefiera MSI, que Android confirme APK, firma, versión y hash, y que todo apunte a los archivos de la entrega. Tras publicar, vuelve a verificar los manifiestos y añade los enlaces a las descargas en el README.
+
+## Preparar un candidato local
+
+- Windows requiere MSVC, Rust 1.95.0 y .NET SDK 10.0.403. Ejecuta `pnpm --filter @neubiki/desktop tauri:build --target x86_64-pc-windows-msvc --bundles msi nsis` con `TAURI_SIGNING_PRIVATE_KEY` y `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. El comando prepara el conector desde los pins y comprueba su procedencia, recursos y ABI. Usa `NEUBIKI_DOTNET` para señalar una instalación aislada del SDK. Las firmas Tauri acompañan a los dos instaladores. Authenticode requiere su propio certificado.
+- Android requiere NDK 28.2.13676358, SDK 36, build-tools 36.0.0, JDK 21 y las variables de firma de `pnpm release:secrets:check`. En Ubuntu, `pnpm android:build:release` compila el conector y el APK. Para empaquetar en Windows, ejecuta `node scripts/prepare-proton-android.mjs --abi arm64-v8a` en Ubuntu, conserva los recursos y el árbol `output/release-<versión>/android`, y ejecuta `pnpm android:build:release --native-receipt <android-native.json>` en Windows. El empaquetado verifica las bibliotecas, fuentes y avisos transferidos y verifica el APK firmado con la huella de la primera versión de Neubiki.
+- Conserva los archivos de fuentes correspondientes a ambos conectores, el archivo de OpenSSL y las pruebas de empaquetado junto con los instaladores. Mantén las claves privadas y sus contraseñas fuera de Git y de los entregables.
+
+Consulta las [instrucciones para coordinar una entrega](../skills/release-management-skill.md) y la [lista de aceptación](manual-test-checklist.md).

@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "resources": [
+      "crates/neubiki-docs/assets/fonts/OFL.txt",
+      "resources/proton/windows/neubiki_proton.dll",
+      "resources/proton/windows/proton_crypto.dll",
+      "resources/proton/windows/THIRD-PARTY-NOTICES.txt",
+      "resources/proton/windows/provenance.json"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "neubiki-ai"
+version = "2.5.1"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+base64 = "0.22"
+neubiki-core = { path = "../neubiki-core" }
+neubiki-ai-skills = { path = "../neubiki-ai-skills" }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

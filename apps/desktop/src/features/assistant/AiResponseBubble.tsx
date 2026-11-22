@@ -1,0 +1,177 @@
+import { useEffect, useState } from "react";
+import { X } from "lucide-react";
+import { CountdownCloseButton } from "../../components/ui/CountdownCloseButton";
+import { AiEditProposalCard } from "./AiEditProposalCard";
+import { AiPendingIntentActions } from "./AiPendingIntentActions";
+import type { AiEditProposal, AiIntentActionType, AiPendingIntent, AiSkillApplication, AiSkillDiagnostic } from "../../types/domain";
+
+type AiResponseBubbleProps = {
+  embedded?: boolean;
+  applyingEditProposalId?: string | null;
+  bubble: { id: string; answer: string; usedSkills?: string[]; skillApplications?: AiSkillApplication[]; skillDiagnostics?: AiSkillDiagnostic[] } | null;
+  pendingIntent?: AiPendingIntent | null;
+  editProposal?: AiEditProposal | null;
+  staleEditOperationIds?: string[];
+  blockedEditOperationReasons?: Record<string, string>;
+  appliedEditOperationIds?: string[];
+  onIntentAction?: (action: AiIntentActionType, intentId: string) => void | Promise<void>;
+  onApplyEditProposal?: (proposalId: string, operationIds?: string[]) => void | Promise<void>;
+  onDiscardEditProposal?: (proposalId: string) => void;
+  onClose: () => void;
+  onOpenConversation: () => void;
+};
+
+export function AiResponseBubble({
+  embedded = false,
+  applyingEditProposalId = null,
+  bubble,
+  pendingIntent = null,
+  editProposal = null,
+  staleEditOperationIds = [],
+  blockedEditOperationReasons = {},
+  appliedEditOperationIds = [],
+  onIntentAction,
+  onApplyEditProposal,
+  onDiscardEditProposal,
+  onClose,
+  onOpenConversation,
+}: AiResponseBubbleProps) {
+  const [visibleBubble, setVisibleBubble] = useState(bubble);
+  const [closing, setClosing] = useState(false);
+
+  useEffect(() => {
+    if (bubble) {
+      setVisibleBubble(bubble);
+      setClosing(false);
+      return;
+    }
+
+    if (!visibleBubble) return;
+    setClosing(true);
+    const timeout = window.setTimeout(() => {
+      setVisibleBubble(null);
+      setClosing(false);
+    }, 180);
+    return () => window.clearTimeout(timeout);
+  }, [bubble, visibleBubble]);
+
+  const pendingReview = editProposal?.status === "proposed" || Boolean(pendingIntent);
+  if (!visibleBubble && !pendingReview) return null;
+  const response = visibleBubble ?? { id: editProposal?.interactionId ?? "pending", answer: "" };
+
+  const longAnswer = response.answer.length > 520;
+  const answer = longAnswer ? `${response.answer.slice(0, 520).trim()}...` : response.answer;
+  const usedSkills = response.usedSkills ?? [];
+  const applications = response.skillApplications ?? [];
+  const diagnostics = response.skillDiagnostics ?? [];
+  const skillSummary = applications.length
+    ? applications.filter((application) => application.status === "applied").map(applicationLabel).join(", ")
+    : usedSkills.map(skillLabel).join(", ");
+
+  return (
+    <div
+      className={[
+        embedded ? "pointer-events-auto relative w-full py-2" : "pointer-events-auto absolute bottom-[92px] right-8 z-30 w-[min(460px,calc(100%-56px))] rounded-2xl border border-line bg-white p-3 shadow-menu transition duration-180 ease-out",
+        closing && !pendingReview ? "translate-y-2 opacity-0" : "translate-y-0 opacity-100",
+      ].join(" ")}
+    >
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          {answer && <p className="whitespace-pre-wrap text-[13px] leading-6 text-ink-primary">{answer}</p>}
+          {longAnswer ? (
+            <button className="mt-2 rounded-full px-2 py-1 text-[11px] font-semibold text-brand-orange hover:bg-brand-hover hover:text-brand-dark" onClick={onOpenConversation}>
+              Abrir en IA
+            </button>
+          ) : null}
+          {skillSummary ? (
+            <div className="mt-2 rounded-md border border-line bg-panel/40 px-2 py-1.5">
+              <p className="truncate text-[10px] font-semibold text-ink-secondary">
+                Skills usadas: <span className="text-ink-primary">{skillSummary}</span>
+              </p>
+              {diagnostics.length ? (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-[10px] font-semibold text-brand-orange hover:text-brand-dark">Diagnostico</summary>
+                  <div className="mt-1 space-y-1">
+                    {diagnostics.slice(0, 4).map((diagnostic) => (
+                      <p key={`${diagnostic.skillId ?? "verifier"}-${diagnostic.status ?? diagnostic.level ?? "info"}-${diagnostic.title ?? diagnostic.message ?? ""}`} className="text-[10px] leading-4 text-ink-secondary">
+                        <span className="font-semibold text-ink-primary">{diagnostic.modeId ? `${skillLabel(diagnostic.skillId ?? "verifier")} / ${modeLabel(diagnostic.modeId)}` : skillLabel(diagnostic.skillId ?? "verifier")}:</span> {diagnostic.title ?? diagnostic.message}
+                        {diagnostic.phase ? <span> · {diagnostic.phase}</span> : null}
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
+          {onIntentAction ? (
+            <AiPendingIntentActions
+              intent={pendingIntent}
+              onAction={onIntentAction}
+              onOpenConversation={onOpenConversation}
+              showConversationAction
+            />
+          ) : null}
+          {onApplyEditProposal && onDiscardEditProposal ? (
+            <AiEditProposalCard
+              proposal={editProposal}
+              applying={Boolean(editProposal && editProposal.id === applyingEditProposalId)}
+              staleOperationIds={staleEditOperationIds}
+              blockedOperationReasons={blockedEditOperationReasons}
+              appliedOperationIds={appliedEditOperationIds}
+              compact
+              onApply={onApplyEditProposal}
+              onDiscard={onDiscardEditProposal}
+              onOpenConversation={onOpenConversation}
+            />
+          ) : null}
+        </div>
+        {pendingReview ? null : embedded ? <button className="grid min-h-11 min-w-11 place-items-center text-ink-secondary" aria-label="Cerrar respuesta IA" onClick={onClose}><X size={16}/></button> : <CountdownCloseButton
+          ariaLabel="Cerrar respuesta IA"
+          className="text-ink-secondary hover:bg-brand-hover hover:text-brand-orange"
+          durationMs={10_000}
+          onClose={onClose}
+          resetKey={response.id}
+        />}
+      </div>
+    </div>
+  );
+}
+
+function skillLabel(skillId: string) {
+  const explicit: Record<string, string> = {
+    "neubiki.research_report": "Informe de investigación",
+    "neubiki.mermaid": "Mermaid",
+    "neubiki.markdown": "Markdown",
+    "neubiki.document.review": "Revision de documentos",
+    "neubiki.document.compose": "Composicion documental",
+    "neubiki.document.edit": "Edicion documental",
+    "neubiki.project.knowledge": "Conocimiento del proyecto",
+    "neubiki.governance": "Gobernanza",
+  };
+  return explicit[skillId] ?? skillId.replace(/^neubiki\./, "").replace(/[.-]/g, " ");
+}
+
+function modeLabel(modeId: string) {
+  const explicit: Record<string, string> = {
+    diagram_flow: "flujo",
+    diagram_sequence: "secuencia",
+    diagram_structure: "estructura",
+    diagram_planning: "planificacion",
+    diagram_data: "datos",
+    diagram_technical: "tecnico",
+    ejecutivo: "ejecutivo",
+    profundo: "profundo",
+    comparativo: "comparativo",
+    normativo: "normativo",
+    tecnico: "tecnico",
+    table: "tabla",
+    structure: "estructura",
+    clarity: "claridad",
+    risk: "riesgos",
+  };
+  return explicit[modeId] ?? modeId.replace(/_/g, " ");
+}
+
+function applicationLabel(application: AiSkillApplication) {
+  return `${skillLabel(application.skillId)} / ${modeLabel(application.modeId)}`;
+}

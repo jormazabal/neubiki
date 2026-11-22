@@ -1,0 +1,6 @@
+@media (pointer:coarse),(max-width:820px) {
+  .neubiki-handwritten-editor .neubiki-handwritten-toolbar-row { height:52px; }
+  .neubiki-handwritten-editor .neubiki-handwritten-toolbar-column { width:52px; }
+  .neubiki-handwritten-editor .neubiki-handwritten-toolbar-row button,
+  .neubiki-handwritten-editor .neubiki-handwritten-toolbar-column button { min-width:44px; min-height:44px; }
+}

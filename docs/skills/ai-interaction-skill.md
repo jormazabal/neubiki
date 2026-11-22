@@ -1,0 +1,31 @@
+# AI Interaction Skill
+
+Use this guidance when changing Neubiki AI flows.
+
+## Required Pattern
+
+- Resolve user intent through structured state and an LLM `intentDecision`.
+- Use `executionMode=quick` by default. Quick mode must be one direct execution pass and must never return or route to `agentic_task`.
+- Use `executionMode=reasoning` only when the user selects Razonar in the prompt. Run a short structured preflight first, then execute direct, ask a real clarification, block on missing configured permission, or route to an agentic task.
+- Treat `reasoningDepth` as a per-prompt budget signal: `light`, `medium`, or `deep`.
+- Persist a single active `AiPendingIntent` per project only when a request needs later execution.
+- Treat app IA settings as the permission source of truth. If the required permission is enabled, execute the structured change without conversational permission prompts; if it is disabled, return a blocked structured operation that tells the user to change `Configuración de la app > IA`.
+- Preserve `targetDocumentId` from the originating document until the intent is completed or cancelled, even if the user continues in the IA tab.
+- Execute document and project changes only from structured fields such as `documentChange`, `operations`, `pendingIntent`, and `intentAction`.
+- Treat `answer` as conversational UI text only. Never promote it into document content.
+- Treat visible prompt context chips as the active source set. The frontend sends `contextSourceIds`; Rust runtime services resolve, validate, refresh TTL, and record `sourcesUsed` on the user conversation event.
+- Reference explicit source names or paths when a response uses `context.explicitSources.sources`, and do not invent content from sources that are not included.
+
+## Forbidden Pattern
+
+- Do not infer confirmation, cancellation, replacement, creation, or routing from regexes, keyword checks, language-specific phrases, or lists such as "yes/si/ok".
+- Do not simulate button actions by sending natural-language prompts.
+- Do not apply document edits from a conversational answer.
+
+## UX Defaults
+
+- Keep simple document tasks in-place with `uiPlacement=document_bubble`.
+- Keep the prompt default on `Rápido` to avoid unnecessary token use.
+- Keep context chips inside the prompt surface so the user can see exactly what will be sent. Warning/expiry states should remain compact and use the orange Neubiki accent.
+- Use `uiPlacement=conversation_tab` only for longer agentic tasks: multiple documents, multiple sources, checkpoints, or extended web research.
+- Buttons on pending intent cards must send structured `intentAction` values such as `apply` or `cancel`.

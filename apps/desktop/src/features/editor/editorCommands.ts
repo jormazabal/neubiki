@@ -1,0 +1,857 @@
+import type { Editor } from "@milkdown/kit/core";
+import { commandsCtx, editorViewCtx, parserCtx, serializerCtx } from "@milkdown/kit/core";
+import { Slice, type Node as ProseMirrorNode } from "@milkdown/kit/prose/model";
+import { TextSelection, type EditorState } from "@milkdown/kit/prose/state";
+import type { PluginKey } from "@milkdown/kit/prose/state";
+import { closeHistory, redoDepth, undoDepth } from "@milkdown/kit/prose/history";
+import { lift } from "@milkdown/kit/prose/commands";
+import {
+  createCodeBlockCommand,
+  insertHrCommand,
+  insertImageCommand,
+  liftListItemCommand,
+  turnIntoTextCommand,
+  toggleEmphasisCommand,
+  toggleInlineCodeCommand,
+  toggleLinkCommand,
+  toggleStrongCommand,
+  wrapInBlockquoteCommand,
+  wrapInBulletListCommand,
+  wrapInHeadingCommand,
+  wrapInOrderedListCommand,
+} from "@milkdown/kit/preset/commonmark";
+import { insertTableCommand, toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
+import { redoCommand, undoCommand } from "@milkdown/kit/plugin/history";
+import type { MarkdownEditorAction, MarkdownEditorController, MarkdownEditorFormatState, MarkdownEditorHistoryState, MarkdownEditorSelection } from "./editorTypes";
+import { emptyMarkdownEditorHistoryState } from "./editorTypes";
+import { defaultMarkdownHighlightColor, highlightSchema, normalizeMarkdownHighlightColor } from "./highlightExtension";
+import { toggleUnderlineCommand } from "./underlineExtension";
+import { documentHeadings, documentMatches } from "./documentTools";
+import { replacementImageAttributes } from "./imageFidelity";
+
+export function createMarkdownEditorController(editor: Editor, selectionFocusPluginKey?: PluginKey, transientTextPluginKey?: PluginKey,
+  publishedSnapshot?: () => { markdown: string; document: ProseMirrorNode } | null,
+): MarkdownEditorController {
+  return {
+    getMarkdownSnapshot() {
+      return editor.action(ctx => {
+        const view = ctx.get(editorViewCtx);
+        if(view.composing)throw new Error("Termina la composición de texto antes de insertar o cambiar de vista. El contenido permanece en el editor.");
+        const document = view.state.doc;
+        const snapshot = publishedSnapshot?.();
+        return snapshot?.document.eq(document) ? snapshot.markdown : ctx.get(serializerCtx)(document);
+      });
+    },
+    matchesMarkdown(markdown) {
+      try {
+        const snapshot = publishedSnapshot?.();
+        return snapshot?.markdown === markdown && editor.action(ctx => {const view=ctx.get(editorViewCtx);return !view.composing&&snapshot.document.eq(view.state.doc);});
+      }
+      catch { return false; }
+    },
+    getMarkdownSelection() {
+      return editor.action(ctx => {
+        const view = ctx.get(editorViewCtx);
+        const { doc, selection } = view.state;
+        if (view.composing || !(selection instanceof TextSelection)) return null;
+        const { from, to, empty } = selection;
+        return {
+          focusType: empty ? "cursor" : "selection",
+          from,
+          to,
+          position: empty ? from : null,
+          text: empty ? "" : doc.textBetween(from, to, "\n", "\n"),
+          markdown: empty ? "" : ctx.get(serializerCtx)(doc.cut(from, to)),
+        };
+      });
+    },
+    applyMarkdownAtRange(from, to, markdown) {
+      try {
+        return editor.action(ctx => {
+          const view = ctx.get(editorViewCtx);
+          const { state } = view;
+          if (view.composing || !view.editable || !Number.isInteger(from) || !Number.isInteger(to)
+            || from < 0 || to < from || to > state.doc.content.size) return false;
+          const result = ctx.get(parserCtx)(markdown);
+          if (!result) return false;
+          const start = state.doc.resolve(from);
+          const end = state.doc.resolve(to);
+          const block = result.firstChild;
+          // An inline fragment of the same kind belongs within its existing block.
+          const open = start.sameParent(end) && start.parent.isTextblock && result.childCount === 1
+            && (block?.type === start.parent.type || block?.type.name === "paragraph") ? 1 : 0;
+          const slice = markdown.trim() ? new Slice(result.content, open, open) : Slice.empty;
+          const transaction = state.tr.replace(from, to, slice);
+          if (!transaction.docChanged) return false;
+          view.dispatch(closeHistory(transaction).scrollIntoView());
+          view.dispatch(closeHistory(view.state.tr));
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    getHeadings() { return editor.action(ctx => documentHeadings(ctx.get(editorViewCtx).state.doc)); },
+    findText(query, options) { return editor.action(ctx => documentMatches(ctx.get(editorViewCtx).state.doc, query, 1001, options)); },
+    navigateTo(position, endPosition) {
+      return editor.action(ctx => {
+        const view = ctx.get(editorViewCtx);
+        const target = Math.max(0, Math.min(position, view.state.doc.content.size));
+        const selection = endPosition === undefined
+          ? TextSelection.near(view.state.doc.resolve(target))
+          : TextSelection.between(view.state.doc.resolve(target), view.state.doc.resolve(Math.max(target, Math.min(endPosition, view.state.doc.content.size))));
+        view.dispatch(view.state.tr.setSelection(selection).scrollIntoView());
+        view.focus(); return true;
+      });
+    },
+    replaceText(query, replacement, all, index = 0, options) {
+      return editor.action(ctx => {
+        const view = ctx.get(editorViewCtx);
+        const matches = documentMatches(view.state.doc, query, 1001, options);
+        if (matches.length > 1000) return 0;
+        const selected = all ? matches : matches[index] ? [matches[index]] : [];
+        if (!selected.length) return 0;
+        let transaction = view.state.tr;
+        for (const match of [...selected].reverse()) transaction = transaction.insertText(replacement, match.from, match.to);
+        view.dispatch(closeHistory(transaction).setMeta("addToHistory", true).scrollIntoView());
+        // Subsequent typing is a separate undo step from this reviewed replacement.
+        view.dispatch(closeHistory(view.state.tr));
+        view.focus(); return selected.length;
+      });
+    },
+    run(action, options) {
+      return editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        const commands = ctx.get(commandsCtx);
+
+        view.focus();
+
+        switch (action) {
+          case "paragraph":
+            return commands.call(turnIntoTextCommand.key);
+          case "heading-1":
+            return commands.call(wrapInHeadingCommand.key, 1);
+          case "heading-2":
+            return commands.call(wrapInHeadingCommand.key, 2);
+          case "heading-3":
+            return commands.call(wrapInHeadingCommand.key, 3);
+          case "heading-4":
+            return commands.call(wrapInHeadingCommand.key, 4);
+          case "heading-5":
+            return commands.call(wrapInHeadingCommand.key, 5);
+          case "heading-6":
+            return commands.call(wrapInHeadingCommand.key, 6);
+          case "bold":
+            return commands.call(toggleStrongCommand.key);
+          case "italic":
+            return commands.call(toggleEmphasisCommand.key);
+          case "underline":
+            return commands.call(toggleUnderlineCommand.key);
+          case "highlight":
+            return applyHighlight(ctx, options?.highlight?.color);
+          case "clear-highlight":
+            return clearHighlight(ctx);
+          case "strike":
+            return commands.call(toggleStrikethroughCommand.key);
+          case "clear-format":
+            return clearFormatting(ctx);
+          case "bullet-list":
+            return toggleBulletList(ctx);
+          case "ordered-list":
+            return toggleOrderedList(ctx);
+          case "check-list":
+            return toggleTaskList(ctx);
+          case "table":
+            return commands.call(insertTableCommand.key, {
+              row: clampTableDimension(options?.table?.rows ?? 3),
+              col: clampTableDimension(options?.table?.columns ?? 4),
+            });
+          case "inline-code":
+            return commands.call(toggleInlineCodeCommand.key);
+          case "code-block":
+            return commands.call(createCodeBlockCommand.key);
+          case "link":
+            return applyLink(ctx, options?.link?.href);
+          case "image":
+            return applyImage(ctx, options?.image);
+          case "diagram":
+            return options?.diagram?.markdown ? insertMarkdownIntoSelection(ctx, options.diagram.markdown) : false;
+          case "quote":
+            return toggleBlockquote(ctx);
+          case "horizontal-rule":
+            return commands.call(insertHrCommand.key);
+          case "undo":
+            return commands.call(undoCommand.key);
+          case "redo":
+            return commands.call(redoCommand.key);
+          default:
+            return false;
+        }
+      });
+    },
+    replaceMarkdown(markdown, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const parser = ctx.get(parserCtx);
+          const nextDocument = parser(markdown);
+          const { state } = view;
+
+          if (state.doc.eq(nextDocument)) return true;
+
+          const transaction = state.tr
+            .replaceWith(0, state.doc.content.size, nextDocument.content)
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+
+          view.dispatch(options?.separateHistory ? closeHistory(transaction) : transaction);
+          if (options?.separateHistory) view.dispatch(closeHistory(view.state.tr));
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    replaceRange(from, to, markdown, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const parser = ctx.get(parserCtx);
+          const nextDocument = parser(markdown);
+          const { state } = view;
+          const safeFrom = clampDocumentPosition(from, state.doc.content.size);
+          const safeTo = clampDocumentPosition(to, state.doc.content.size);
+
+          if (safeFrom > safeTo) return false;
+
+          const transaction = state.tr
+            .replaceWith(safeFrom, safeTo, nextDocument.content)
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+
+          view.dispatch(transaction);
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    appendMarkdown(markdown, options) {
+      try {
+        return editor.action(ctx => {
+          const view=ctx.get(editorViewCtx);if(view.composing)return false;
+          const next=ctx.get(parserCtx)(markdown);if(!next.childCount)return false;
+          const transaction=closeHistory(view.state.tr).insert(view.state.doc.content.size,next.content).setMeta("addToHistory",options?.addToHistory!==false);
+          view.dispatch(transaction);
+          view.dispatch(closeHistory(view.state.tr));
+          return true;
+        });
+      }catch{return false;}
+    },
+    insertMarkdown(markdown, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const parser = ctx.get(parserCtx);
+          const nextDocument = parser(markdown);
+          const transaction = view.state.tr
+            .replaceSelection(new Slice(nextDocument.content, 0, 0))
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+
+          view.dispatch(transaction);
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    insertMarkdownAt(position, markdown, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const parser = ctx.get(parserCtx);
+          const nextDocument = parser(markdown);
+          const { state } = view;
+          const safePosition = clampDocumentPosition(position, state.doc.content.size);
+
+          const transaction = state.tr
+            .replaceWith(safePosition, safePosition, nextDocument.content)
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+
+          view.dispatch(transaction);
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    replaceImageAt(position, markdown, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const parser = ctx.get(parserCtx);
+          const image = findImageNodeAt(view.state, position);
+          if (!image) return false;
+
+          const nextImage = findFirstImageNode(parser(markdown));
+          if (!nextImage) return false;
+
+          const transaction = view.state.tr
+            .setNodeMarkup(image.position, undefined, replacementImageAttributes(image.node,nextImage))
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+
+          view.dispatch(transaction);
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    deleteImageAt(position, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const image = findImageNodeAt(view.state, position);
+          if (!image) return false;
+
+          const range = findImageDeletionRange(view.state, image.position, image.node.nodeSize);
+          const transaction = view.state.tr
+            .delete(range.from, range.to)
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+
+          view.dispatch(transaction);
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    replaceDiagramAt(position, nodeSize, markdown, options) {
+      return replaceDocumentRange(editor, position, position + nodeSize, markdown, options);
+    },
+    deleteDiagramAt(position, nodeSize, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const safeFrom = clampDocumentPosition(position, view.state.doc.content.size);
+          const safeTo = clampDocumentPosition(position + nodeSize, view.state.doc.content.size);
+          if (safeFrom >= safeTo) return false;
+
+          const transaction = view.state.tr
+            .delete(safeFrom, safeTo)
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+
+          view.dispatch(transaction);
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    setCursorAtClientPoint(clientX, clientY, options) {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const position = view.posAtCoords({ left: clientX, top: clientY });
+          if (!position) return false;
+
+          const safePosition = clampDocumentPosition(position.pos, view.state.doc.content.size);
+          const selection = TextSelection.near(view.state.doc.resolve(safePosition));
+          const transaction = view.state.tr
+            .setSelection(selection)
+            .setMeta("addToHistory", options?.addToHistory === true)
+            .scrollIntoView();
+
+          view.dispatch(transaction);
+          view.focus();
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    insertText(text, options) {
+      if (!text) return true;
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          view.focus();
+          let transaction = view.state.tr
+            .insertText(text)
+            .setMeta("addToHistory", options?.addToHistory !== false)
+            .scrollIntoView();
+          if (transientTextPluginKey) {
+            transaction = transaction.setMeta(transientTextPluginKey, null);
+          }
+          view.dispatch(transaction);
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    setTransientTextPreview(text) {
+      if (!transientTextPluginKey) return false;
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          const position = view.state.selection.from;
+          view.dispatch(view.state.tr.setMeta(transientTextPluginKey, text ? { position, text } : null).setMeta("addToHistory", false));
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    clearTransientTextPreview() {
+      if (!transientTextPluginKey) return false;
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          view.dispatch(view.state.tr.setMeta(transientTextPluginKey, null).setMeta("addToHistory", false));
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+    canInsertText() {
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          return Boolean(view.state.selection);
+        });
+      } catch {
+        return false;
+      }
+    },
+    getFormatState() {
+      try {
+        return editor.action((ctx) => readMarkdownEditorFormatState(ctx.get(editorViewCtx).state));
+      } catch {
+        return {};
+      }
+    },
+    getHistoryState() {
+      try {
+        return editor.action((ctx) => readMarkdownEditorHistoryState(ctx.get(editorViewCtx).state));
+      } catch {
+        return emptyMarkdownEditorHistoryState;
+      }
+    },
+    setSelectionFocus(selection: MarkdownEditorSelection | null) {
+      if (!selectionFocusPluginKey) return false;
+      try {
+        return editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          view.dispatch(view.state.tr.setMeta(selectionFocusPluginKey, selection ? { from: selection.from, to: selection.to } : null));
+          return true;
+        });
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+function replaceDocumentRange(editor: Editor, from: number, to: number, markdown: string, options?: { addToHistory?: boolean }) {
+  try {
+    return editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const parser = ctx.get(parserCtx);
+      const nextDocument = parser(markdown);
+      const { state } = view;
+      const safeFrom = clampDocumentPosition(from, state.doc.content.size);
+      const safeTo = clampDocumentPosition(to, state.doc.content.size);
+
+      if (safeFrom > safeTo) return false;
+
+      const transaction = state.tr
+        .replaceWith(safeFrom, safeTo, nextDocument.content)
+        .setMeta("addToHistory", options?.addToHistory !== false)
+        .scrollIntoView();
+
+      view.dispatch(transaction);
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
+function clampDocumentPosition(position: number, maxPosition: number) {
+  return Math.max(0, Math.min(position, maxPosition));
+}
+
+type EditorCommandContext = Parameters<Editor["action"]>[0] extends (ctx: infer Ctx) => unknown ? Ctx : never;
+
+export function readMarkdownEditorFormatState(state: EditorState): MarkdownEditorFormatState {
+  const block = findBlockState(state);
+  const inTaskItem = Boolean(block.listItem?.node.attrs.checked !== null && block.listItem?.node.attrs.checked !== undefined);
+  const inBulletList = block.listType === "bullet_list";
+  const inOrderedList = block.listType === "ordered_list";
+
+  return {
+    paragraph:
+      block.textBlockType === "paragraph" &&
+      !block.listType &&
+      !block.blockquote &&
+      !block.codeBlock,
+    "heading-1": block.textBlockType === "heading" && block.headingLevel === 1,
+    "heading-2": block.textBlockType === "heading" && block.headingLevel === 2,
+    "heading-3": block.textBlockType === "heading" && block.headingLevel === 3,
+    "heading-4": block.textBlockType === "heading" && block.headingLevel === 4,
+    "heading-5": block.textBlockType === "heading" && block.headingLevel === 5,
+    "heading-6": block.textBlockType === "heading" && block.headingLevel === 6,
+    bold: selectionHasMark(state, "strong"),
+    italic: selectionHasMark(state, "emphasis"),
+    underline: selectionHasMark(state, "underline"),
+    highlight: selectionHasMark(state, "highlight"),
+    highlightColor: selectionMarkAttribute(state, "highlight", "color"),
+    strike: selectionHasMark(state, "strike_through"),
+    "inline-code": selectionHasMark(state, "inlineCode"),
+    "code-block": block.codeBlock,
+    link: selectionHasMark(state, "link"),
+    "bullet-list": inBulletList && !inTaskItem,
+    "ordered-list": inOrderedList && !inTaskItem,
+    "check-list": inTaskItem,
+    quote: block.blockquote,
+  };
+}
+
+function clampTableDimension(value: number) {
+  return Math.min(Math.max(Math.floor(value) || 1, 1), 20);
+}
+
+export function readMarkdownEditorHistoryState(state: EditorState): MarkdownEditorHistoryState {
+  const undoableEvents = Number(undoDepth(state)) || 0;
+  const redoableEvents = Number(redoDepth(state)) || 0;
+
+  return {
+    canUndo: undoableEvents > 0,
+    canRedo: redoableEvents > 0,
+    undoDepth: undoableEvents,
+    redoDepth: redoableEvents,
+  };
+}
+
+function clearFormatting(ctx: EditorCommandContext) {
+  const commands = ctx.get(commandsCtx);
+  const paragraphApplied = commands.call(turnIntoTextCommand.key);
+  const view = ctx.get(editorViewCtx);
+  const { state } = view;
+  const { from, to, empty, $from } = state.selection;
+  let tr = state.tr;
+
+  if (empty) {
+    Object.values(state.schema.marks).forEach((mark) => {
+      tr = tr.removeStoredMark(mark);
+    });
+    tr = tr.removeMark($from.start(), $from.end());
+  } else {
+    tr = tr.removeMark(from, to);
+  }
+
+  if (tr.docChanged || tr.storedMarksSet) {
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+
+  return paragraphApplied;
+}
+
+function applyHighlight(ctx: EditorCommandContext, color = defaultMarkdownHighlightColor) {
+  const view = ctx.get(editorViewCtx);
+  const markType = highlightSchema.type(ctx);
+  const { state } = view;
+  const { empty, from, to, $from } = state.selection;
+  const attrs = { color: normalizeMarkdownHighlightColor(color) };
+  let tr = state.tr;
+
+  if (empty) {
+    tr = tr.removeStoredMark(markType).addStoredMark(markType.create(attrs));
+  } else {
+    tr = tr.removeMark(from, to, markType).addMark(from, to, markType.create(attrs));
+  }
+
+  if (tr.docChanged || tr.storedMarksSet) {
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+
+  const fallbackFrom = empty ? $from.start() : from;
+  const fallbackTo = empty ? $from.end() : to;
+  view.dispatch(state.tr.removeMark(fallbackFrom, fallbackTo, markType).addMark(fallbackFrom, fallbackTo, markType.create(attrs)).scrollIntoView());
+  return true;
+}
+
+function clearHighlight(ctx: EditorCommandContext) {
+  const view = ctx.get(editorViewCtx);
+  const markType = highlightSchema.type(ctx);
+  const { state } = view;
+  const { empty, from, to, $from } = state.selection;
+  let tr = state.tr;
+
+  if (empty) {
+    tr = tr.removeStoredMark(markType).removeMark($from.start(), $from.end(), markType);
+  } else {
+    tr = tr.removeMark(from, to, markType);
+  }
+
+  if (tr.docChanged || tr.storedMarksSet) {
+    view.dispatch(tr.scrollIntoView());
+    return true;
+  }
+
+  return false;
+}
+
+function toggleBlockquote(ctx: EditorCommandContext) {
+  const view = ctx.get(editorViewCtx);
+  if (findBlockState(view.state).blockquote) {
+    return lift(view.state, view.dispatch, view);
+  }
+  return ctx.get(commandsCtx).call(wrapInBlockquoteCommand.key);
+}
+
+function applyLink(ctx: EditorCommandContext, url?: string) {
+  const href = url ?? window.prompt("URL del enlace", "https://");
+  if (!href) return false;
+
+  const commands = ctx.get(commandsCtx);
+  const view = ctx.get(editorViewCtx);
+  const { state } = view;
+
+  if (!state.selection.empty) {
+    return commands.call(toggleLinkCommand.key, { href });
+  }
+
+  const link = state.schema.marks.link;
+  if (!link) return commands.call(toggleLinkCommand.key, { href });
+
+  const text = state.schema.text("enlace", [link.create({ href })]);
+  view.dispatch(state.tr.replaceSelectionWith(text).scrollIntoView());
+  return true;
+}
+
+function applyImage(ctx: EditorCommandContext, image?: { src: string; alt: string }) {
+  const src = image?.src ?? window.prompt("URL de la imagen", "https://");
+  if (!src) return false;
+
+  const alt = image?.alt ?? window.prompt("Texto alternativo", "Imagen") ?? "Imagen";
+  return ctx.get(commandsCtx).call(insertImageCommand.key, { src, alt });
+}
+
+function insertMarkdownIntoSelection(ctx: EditorCommandContext, markdown: string) {
+  const view = ctx.get(editorViewCtx);
+  const parser = ctx.get(parserCtx);
+  const nextDocument = parser(markdown);
+  const transaction = view.state.tr.replaceSelection(new Slice(nextDocument.content, 0, 0)).scrollIntoView();
+  view.dispatch(transaction);
+  return true;
+}
+
+function findFirstImageNode(doc: ProseMirrorNode): { attrs: Record<string, unknown> } | null {
+  let image: { attrs: Record<string, unknown> } | null = null;
+  doc.descendants((node) => {
+    if (!isImageLikeNode(node) || image) return !image;
+    image = { attrs: node.attrs };
+    return false;
+  });
+  return image;
+}
+
+function findImageNodeAt(state: EditorState, position: number) {
+  const safePosition = clampDocumentPosition(position, state.doc.content.size);
+  const directNode = state.doc.nodeAt(safePosition);
+  if (directNode && isImageLikeNode(directNode)) {
+    return { node: directNode, position: safePosition };
+  }
+
+  const previousNode = safePosition > 0 ? state.doc.nodeAt(safePosition - 1) : null;
+  if (previousNode && isImageLikeNode(previousNode)) {
+    return { node: previousNode, position: safePosition - 1 };
+  }
+
+  let found: { node: ProseMirrorNode; position: number } | null = null;
+  const from = Math.max(0, safePosition - 4);
+  const to = Math.min(state.doc.content.size, safePosition + 4);
+  state.doc.nodesBetween(from, to, (node, nodePosition) => {
+    if (!isImageLikeNode(node) || found) return !found;
+    found = { node, position: nodePosition };
+    return false;
+  });
+  return found;
+}
+
+function isImageLikeNode(node: ProseMirrorNode) {
+  const typeName = node.type.name.toLowerCase();
+  return typeName.includes("image") && (typeof node.attrs.src === "string" || typeof node.attrs.url === "string");
+}
+
+function findImageDeletionRange(state: EditorState, position: number, nodeSize: number) {
+  const resolvedPosition = state.doc.resolve(position);
+  const parent = resolvedPosition.parent;
+
+  if (parent.type.name === "paragraph" && parent.childCount === 1 && resolvedPosition.depth > 0 && state.doc.childCount > 1) {
+    return {
+      from: resolvedPosition.before(resolvedPosition.depth),
+      to: resolvedPosition.after(resolvedPosition.depth),
+    };
+  }
+
+  return { from: position, to: position + nodeSize };
+}
+
+function toggleBulletList(ctx: EditorCommandContext) {
+  const commands = ctx.get(commandsCtx);
+  const formatState = readMarkdownEditorFormatState(ctx.get(editorViewCtx).state);
+
+  if (formatState["bullet-list"]) {
+    return commands.call(liftListItemCommand.key);
+  }
+
+  if (formatState["ordered-list"] || formatState["check-list"]) {
+    commands.call(liftListItemCommand.key);
+  }
+
+  return commands.call(wrapInBulletListCommand.key);
+}
+
+function toggleOrderedList(ctx: EditorCommandContext) {
+  const commands = ctx.get(commandsCtx);
+  const formatState = readMarkdownEditorFormatState(ctx.get(editorViewCtx).state);
+
+  if (formatState["ordered-list"]) {
+    return commands.call(liftListItemCommand.key);
+  }
+
+  if (formatState["bullet-list"] || formatState["check-list"]) {
+    commands.call(liftListItemCommand.key);
+  }
+
+  return commands.call(wrapInOrderedListCommand.key);
+}
+
+function toggleTaskList(ctx: EditorCommandContext) {
+  const commands = ctx.get(commandsCtx);
+  const formatState = readMarkdownEditorFormatState(ctx.get(editorViewCtx).state);
+
+  if (formatState["check-list"]) {
+    return commands.call(liftListItemCommand.key);
+  }
+
+  if (formatState["ordered-list"]) {
+    commands.call(liftListItemCommand.key);
+  }
+
+  commands.call(wrapInBulletListCommand.key);
+
+  const view = ctx.get(editorViewCtx);
+  const { state } = view;
+  const listItem = findAncestorNode(state, "list_item");
+
+  if (!listItem) return false;
+
+  view.dispatch(
+    state.tr
+      .setNodeMarkup(listItem.position, undefined, {
+        ...listItem.node.attrs,
+        checked: false,
+      })
+      .scrollIntoView(),
+  );
+  return true;
+}
+
+function selectionHasMark(state: EditorState, markName: string) {
+  const markType = state.schema.marks[markName];
+  if (!markType) return false;
+
+  const { empty, from, to, $from } = state.selection;
+
+  if (empty) {
+    return Boolean(markType.isInSet(state.storedMarks ?? $from.marks()));
+  }
+
+  let hasMark = false;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (!node.isText || hasMark) return false;
+    hasMark = Boolean(markType.isInSet(node.marks));
+    return !hasMark;
+  });
+  return hasMark;
+}
+
+function selectionMarkAttribute(state: EditorState, markName: string, attribute: string) {
+  const markType = state.schema.marks[markName];
+  if (!markType) return null;
+
+  const { empty, from, to, $from } = state.selection;
+
+  if (empty) {
+    const mark = markType.isInSet(state.storedMarks ?? $from.marks());
+    return mark ? normalizeMarkdownHighlightColor(mark.attrs[attribute]) : null;
+  }
+
+  let value: string | null = null;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (!node.isText || value) return false;
+    const mark = markType.isInSet(node.marks);
+    if (mark) value = normalizeMarkdownHighlightColor(mark.attrs[attribute]);
+    return !value;
+  });
+  return value;
+}
+
+function findBlockState(state: EditorState) {
+  const { $from } = state.selection;
+  let textBlockType: string | undefined;
+  let headingLevel: number | undefined;
+  let listType: "bullet_list" | "ordered_list" | undefined;
+  let listItem: ReturnType<typeof findAncestorNode> | undefined;
+  let blockquote = false;
+  let codeBlock = false;
+
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+
+    if (!textBlockType && node.isTextblock) {
+      textBlockType = node.type.name;
+      headingLevel = Number(node.attrs.level) || undefined;
+      codeBlock = node.type.name === "code_block";
+    }
+
+    if (node.type.name === "bullet_list" || node.type.name === "ordered_list") {
+      listType = node.type.name;
+    }
+
+    if (!listItem && node.type.name === "list_item") {
+      listItem = { node, depth, position: $from.before(depth) };
+    }
+
+    if (node.type.name === "blockquote") {
+      blockquote = true;
+    }
+  }
+
+  return { textBlockType, headingLevel, listType, listItem, blockquote, codeBlock };
+}
+
+function findAncestorNode(state: EditorState, typeName: string) {
+  const { $from } = state.selection;
+
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+    if (node.type.name === typeName) {
+      return { node, depth, position: $from.before(depth) };
+    }
+  }
+
+  return undefined;
+}

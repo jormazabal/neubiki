@@ -1,0 +1,9 @@
+[package]
+name = "neubiki-drawing"
+version = "2.5.1"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+neubiki-core = { path = "../neubiki-core" }
+serde_json = "1"

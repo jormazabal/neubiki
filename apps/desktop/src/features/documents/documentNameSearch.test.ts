@@ -1,0 +1,56 @@
+import { describe, expect, it } from "vitest";
+import type { DocumentTreeNode } from "../../types/domain";
+import { getInlineNameCompletion, searchDocumentTreeByName } from "./documentNameSearch";
+
+const nodes: DocumentTreeNode[] = [
+  {
+    id: "folder-product",
+    name: "Producto",
+    type: "folder",
+    open: true,
+    children: [
+      {
+        id: "folder-architecture",
+        name: "Arquitectura",
+        type: "folder",
+        open: false,
+        children: [
+          { id: "doc-runtime", name: "Arquitectura runtime.md", type: "document" },
+          { id: "doc-api", name: "API publica.md", type: "document" },
+        ],
+      },
+    ],
+  },
+  { id: "doc-final", name: "Plan final.md", type: "document" },
+  { id: "attachment-final", name: "Plan final.pdf", type: "attachment" },
+];
+
+describe("searchDocumentTreeByName", () => {
+  it("includes handwritten notes and distinguishes identical names by parent path", () => {
+    const tree: DocumentTreeNode[] = [{id:"folder-a",name:"Equipo A",type:"folder",children:[{id:"note-a",name:"Acta.knote",type:"handwritten-note"}]},{id:"folder-b",name:"Equipo B",type:"folder",children:[{id:"note-b",name:"Acta.knote",type:"handwritten-note"}]}];
+    expect(searchDocumentTreeByName(tree,"acta")).toHaveLength(2);
+    expect(searchDocumentTreeByName(tree,"Equipo B Acta",10,true).map(item=>item.id)).toEqual(["note-b"]);
+  });
+  it("matches text in the middle and end of folder or document names", () => {
+    expect(searchDocumentTreeByName(nodes, "tect").map((result) => result.id)).toEqual(["folder-architecture", "doc-runtime"]);
+    expect(searchDocumentTreeByName(nodes, "final").map((result) => result.id)).toEqual(["doc-final", "attachment-final"]);
+  });
+
+  it("uses the path only as result context, not as a searchable field", () => {
+    expect(searchDocumentTreeByName(nodes, "producto").map((result) => result.id)).toEqual(["folder-product"]);
+  });
+
+  it("accepts token queries against the node name", () => {
+    expect(searchDocumentTreeByName(nodes, "api pub").map((result) => result.id)).toEqual(["doc-api"]);
+  });
+});
+
+describe("getInlineNameCompletion", () => {
+  it("completes only clear name or word prefixes", () => {
+    const [architecture] = searchDocumentTreeByName(nodes, "arqui");
+    expect(getInlineNameCompletion("arqui", architecture)).toBe("tectura");
+
+    const [internalMatch] = searchDocumentTreeByName(nodes, "tect");
+    expect(getInlineNameCompletion("tect", internalMatch)).toBe("");
+  });
+});

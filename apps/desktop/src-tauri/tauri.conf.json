@@ -1,0 +1,88 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Neubiki",
+  "version": "0.7.0",
+  "identifier": "io.github.jormazabal.neubiki.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "beforeBundleCommand": "node ../../scripts/check-installer-resources.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Neubiki",
+        "width": 1536,
+        "height": 1024,
+        "minWidth": 360,
+        "minHeight": 520,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'wasm-unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'",
+        "style-src-attr": "'unsafe-inline'",
+        "font-src": "'self' data:",
+        "img-src": "'self' data: blob: https: http: neubiki-asset: asset:",
+        "media-src": "'self' data: blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost neubiki-asset: http://neubiki-asset.localhost asset: http://asset.localhost blob: data:",
+        "worker-src": "'self' blob:",
+        "object-src": "'none'",
+        "frame-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'",
+        "style-src-attr": "'unsafe-inline'",
+        "font-src": "'self' data:",
+        "img-src": "'self' data: blob: https: http: neubiki-asset: asset:",
+        "media-src": "'self' data: blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost neubiki-asset: http://neubiki-asset.localhost asset: http://asset.localhost blob: data: http://127.0.0.1:1420 ws://127.0.0.1:1420 http://10.0.2.2:1420 ws://10.0.2.2:1420",
+        "worker-src": "'self' blob:",
+        "object-src": "'none'",
+        "frame-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "externalBin": [],
+    "resources": ["crates/neubiki-docs/assets/fonts/OFL.txt"],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      },
+      "signCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../../scripts/sign-windows.ps1 %1",
+      "wix": {
+        "template": "./windows/wix/per-user-main.wxs",
+        "upgradeCode": "86760921-1177-4e2f-81c7-8286d7fd2004"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDODMwNERFODJGQTgzNjYKUldSbWcvcUMzZ1NEL0haclB5NjRTY1p1eUhmMkxvZ2hUdktRTmkyRklWMG5CaXhTSlNwQ0sxMk8K",
+      "endpoints": [],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "applicationId": "io.github.jormazabal.neubiki.mobile",
+  "firstVersionCode": 6000,
+  "versionCode": 6000,
+  "minimumSdk": 29,
+  "certificateSha256": "9adbac119870cc86457a9f8708a40eb4506543a1924e340303feb489f425f567"
+}

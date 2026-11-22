@@ -1,0 +1,16 @@
+{
+  "identifier": "mobile",
+  "description": "Minimal permissions for the Neubiki Android shell.",
+  "platforms": [
+    "android"
+  ],
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "shell:default"
+  ]
+}

@@ -1,0 +1,317 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Existing release tag to build (empty uses the selected workflow ref)
+        type: string
+        default: ""
+      android_only:
+        description: Recover Android assets without rebuilding verified Windows installers
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release-preflight:
+    name: Check release signing inputs
+    # A repaired unpublished tag is dispatched explicitly for the affected
+    # platform so already verified packages are not built or replaced again.
+    if: ${{ vars.NEUBIKI_RELEASE_CHANNEL_CONFIGURED == 'true' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+
+      - name: Validate Android recovery tag
+        if: ${{ inputs.android_only }}
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.release_ref }}
+        run: |
+          test "$REQUESTED_REF" = "v$(cat VERSION)" || { echo "Android recovery requires the exact VERSION tag." >&2; exit 1; }
+          test "$(git describe --tags --exact-match HEAD)" = "$REQUESTED_REF"
+          node scripts/check-version.mjs
+
+      - name: Check signing inputs
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: pnpm release:secrets:check
+
+      - name: Prepare unpublished release for parallel platform builds
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat VERSION)"
+          tag="v$version"
+          state="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [ "$state" = "true" ]; then
+            echo "Continuing the unpublished draft."
+          elif [ -n "$state" ]; then
+            echo "Refusing to replace an already published release." >&2
+            exit 1
+          else
+            gh release create "$tag" --verify-tag --draft --title "Neubiki $version" --notes-file "docs/releases/$version.md"
+          fi
+
+  release-windows:
+    name: Build Windows release draft
+    runs-on: windows-latest
+    needs: release-preflight
+    if: ${{ inputs.android_only != true }}
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read release version
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if (-not $version) {
+            throw "VERSION is empty."
+          }
+          "NEUBIKI_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NEUBIKI_RELEASE_TAG=v$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run release gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm release:check
+
+      - name: Setup .NET NativeAOT SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+
+      - name: Build and validate in-process Proton Windows resources
+        shell: pwsh
+        run: ./scripts/prepare-proton-windows.ps1 -WriteGitHubEnvironment
+
+      - name: Import Windows code signing certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            Write-Host "WINDOWS_CERTIFICATE secret is not configured; Windows Authenticode signing will be skipped."
+            exit 0
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw "WINDOWS_CERTIFICATE_PASSWORD secret is required when WINDOWS_CERTIFICATE is configured."
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP "neubiki-windows-signing.pfx"
+          [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE) | Set-Content -LiteralPath $certificatePath -AsByteStream
+          $securePassword = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword
+          if (-not $certificate.Thumbprint) {
+            throw "Imported Windows signing certificate did not expose a thumbprint."
+          }
+
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Tauri Windows release
+        uses: tauri-apps/tauri-action@v0.6.2
+        env:
+          TAURI_NEUBIKI_FONT_LICENSE: ${{ github.workspace }}/apps/desktop/src-tauri/crates/neubiki-docs/assets/fonts/OFL.txt
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_CONFIG: '{"build":{"beforeBuildCommand":""}}'
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ env.NEUBIKI_RELEASE_TAG }}
+          releaseName: Neubiki ${{ env.NEUBIKI_RELEASE_VERSION }}
+          releaseBody: See docs/releases/${{ env.NEUBIKI_RELEASE_VERSION }}.md for release notes. For Windows, install the MSI asset; the NSIS executable is attached as a secondary asset.
+          releaseDraft: true
+          prerelease: false
+          tauriScript: pnpm tauri
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: false
+
+      - name: Attach Proton notices and corresponding sources
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $source = @(Get-ChildItem -LiteralPath output -Filter '*proton-sources*.zip')
+          if ($source.Count -ne 1) { throw 'Expected exactly one Proton corresponding-source archive.' }
+          gh release upload "$env:NEUBIKI_RELEASE_TAG" $source[0].FullName --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Corresponding-source upload failed.' }
+
+      - name: Preserve Windows packaging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-evidence
+          path: |
+            output/release-regression-evidence.json
+            target/proton-sdk/license-inventory.json
+            apps/desktop/src-tauri/resources/proton/windows/provenance.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release-android:
+    name: Build and upload Android private APK
+    if: ${{ !cancelled() && needs.release-preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    needs:
+      - release-preflight
+    env:
+      CARGO_BUILD_JOBS: "2"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-linux-android
+
+      - name: Setup .NET NativeAOT SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.403
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read release version
+        shell: bash
+        run: |
+          VERSION="$(cat VERSION)"
+          if [ -z "$VERSION" ]; then
+            echo "VERSION is empty." >&2
+            exit 1
+          fi
+          echo "NEUBIKI_RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "NEUBIKI_RELEASE_TAG=v$VERSION" >> "$GITHUB_ENV"
+
+      - name: Restore Android keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 secret is required for Android private APK releases." >&2
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/neubiki-android-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/neubiki-android-release.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed Android APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          NEUBIKI_ANDROID_ABI: arm64
+          NEUBIKI_ANDROID_API_LEVEL: "29"
+        run: pnpm android:build:release
+
+      - name: Create Android update manifest
+        shell: bash
+        run: |
+          VERSION="$(cat VERSION)"
+          APK="output/Neubiki-android-arm64-v${VERSION}.apk"
+          node scripts/create-android-update-manifest.mjs \
+            --apk "$APK" \
+            --out output/android-latest.json \
+            --version "$VERSION" \
+            --abi arm64-v8a \
+            --url "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/$(basename "$APK")" \
+            --notes-url "https://github.com/${{ github.repository }}/releases/tag/v${VERSION}"
+
+      - name: Upload Android release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$NEUBIKI_RELEASE_TAG" output/Neubiki-android-arm64-v*.apk output/android-latest.json "output/release-${NEUBIKI_RELEASE_VERSION}/android/neubiki-proton-android-sources.zip" --clobber
+
+      - name: Preserve Android packaging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android-evidence
+          path: |
+            output/release-*/android/packaging.json
+            output/release-*/android/proton/android-native.json
+            output/release-*/android/proton/bootstrap/license-inventory.json
+          if-no-files-found: ignore
+          retention-days: 14

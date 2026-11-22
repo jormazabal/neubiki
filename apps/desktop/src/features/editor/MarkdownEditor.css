@@ -1,0 +1,149 @@
+.neubiki-editor mark[data-knx-highlight],
+.neubiki-editor .neubiki-highlight {
+  border-radius: 3px;
+  padding: 0 0.12em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.neubiki-editor mark[data-knx-highlight="yellow"],
+.neubiki-editor .neubiki-highlight-yellow {
+  background: #fef08a;
+}
+
+.neubiki-editor mark[data-knx-highlight="green"],
+.neubiki-editor .neubiki-highlight-green {
+  background: #bbf7d0;
+}
+
+.neubiki-editor mark[data-knx-highlight="blue"],
+.neubiki-editor .neubiki-highlight-blue {
+  background: #bfdbfe;
+}
+
+.neubiki-editor mark[data-knx-highlight="pink"],
+.neubiki-editor .neubiki-highlight-pink {
+  background: #fbcfe8;
+}
+
+.neubiki-editor mark[data-knx-highlight="orange"],
+.neubiki-editor .neubiki-highlight-orange {
+  background: #fed7aa;
+}
+
+.neubiki-editor .milkdown-image-block > .image-wrapper {
+  display: inline-block !important;
+  width: fit-content;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  align-items: flex-start !important;
+  padding: 0 !important;
+  line-height: 0;
+  background: transparent !important;
+}
+
+.neubiki-editor .milkdown-image-block > .image-wrapper img[data-type="image-block"] {
+  display: block;
+  width: auto !important;
+  height: auto !important;
+  max-width: 100% !important;
+  aspect-ratio: auto !important;
+  object-fit: contain !important;
+}
+
+.neubiki-editor .milkdown-image-block > .image-wrapper[data-neubiki-image-size="manual"] img[data-type="image-block"] {
+  width: 100% !important;
+  height: auto !important;
+}
+
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]),
+.neubiki-editor .milkdown-image-block:has(> .image-wrapper:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"])) {
+  background: transparent !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) > .image-wrapper,
+.neubiki-editor .milkdown-image-block > .image-wrapper:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) {
+  position: relative;
+  overflow: visible !important;
+  border-radius: 7px;
+  background: transparent !important;
+  outline: 2px solid rgb(var(--accent) / 0.58) !important;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgb(var(--accent) / 0.10) !important;
+}
+
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) > .image-wrapper::before,
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) > .image-wrapper::after,
+.neubiki-editor .milkdown-image-block > .image-wrapper:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"])::before,
+.neubiki-editor .milkdown-image-block > .image-wrapper:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"])::after,
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"])::before,
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"])::after {
+  display: none !important;
+  background: transparent !important;
+  content: none !important;
+  opacity: 0 !important;
+}
+
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) > .image-wrapper > :not(img, .image-resize-handle),
+.neubiki-editor .milkdown-image-block > .image-wrapper:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) > :not(img, .image-resize-handle) {
+  background: transparent !important;
+  opacity: 0 !important;
+}
+
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) img,
+.neubiki-editor .milkdown-image-block > .image-wrapper:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) img,
+.neubiki-editor img:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) {
+  border-color: rgb(var(--accent) / 0.74) !important;
+  filter: none !important;
+  opacity: 1 !important;
+  mix-blend-mode: normal !important;
+}
+
+.neubiki-editor .milkdown-image-block > .image-wrapper > .image-resize-handle {
+  bottom: -8px !important;
+  z-index: 2;
+  height: 8px !important;
+  max-width: min(180px, 46%) !important;
+  min-width: 72px;
+  border: 1px solid rgb(var(--accent) / 0.35);
+  border-radius: 999px;
+  background: rgb(var(--accent) / 0.72) !important;
+  cursor: row-resize !important;
+  opacity: 0;
+  box-shadow: 0 3px 10px rgb(17 24 39 / 0.18);
+}
+
+.neubiki-editor .milkdown-image-block:hover > .image-wrapper > .image-resize-handle,
+.neubiki-editor .milkdown-image-block:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) > .image-wrapper > .image-resize-handle,
+.neubiki-editor .milkdown-image-block > .image-wrapper:is(.ProseMirror-selectednode, .neubiki-selection-media, .selected, [data-selected="true"]) > .image-resize-handle {
+  opacity: 1 !important;
+}
+
+.neubiki-editor .milkdown-image-block > .image-wrapper > .image-resize-handle::before {
+  position: absolute;
+  inset: -8px -16px;
+  content: "";
+}
+
+.neubiki-editor .image-wrapper[data-neubiki-sizing-readonly="true"] .image-resize-handle { display: none !important; }
+.neubiki-image-edit-action:disabled { opacity: .45; cursor: not-allowed; }
+
+
+/* Opaque data stays in the normal document flow; its source is secondary. */
+.neubiki-editor .neubiki-preserved-block { margin: .75rem 0; padding: 0 .75rem; border-radius: 6px; background: #FAFAFA; color: #6B7280; font-size: 12px; }
+.neubiki-editor .neubiki-preserved-block summary { display: list-item; min-height: 44px; align-content: center; cursor: pointer; font-weight: 500; }
+.neubiki-editor .neubiki-preserved-block p { font-size: 12px; margin: 0 0 .5rem; }
+.neubiki-editor .neubiki-preserved-block pre { max-height: 180px; max-width: 100%; overflow: auto; margin: 0 0 .75rem; padding: .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.neubiki-editor .neubiki-editor-paste-notice { position: absolute; top: .5rem; left: .5rem; right: .5rem; z-index: 4; padding: .5rem .75rem; border-radius: 6px; background: #FFF1E8; color: #111827; font-size: 12px; box-shadow: 0 2px 8px #1118270a; }
+.neubiki-editor .neubiki-editor-paste-notice p { margin: 0; font-size: 12px; }
+.neubiki-editor .neubiki-editor-paste-notice > div { display: flex; flex-wrap: wrap; gap: .5rem; }
+.neubiki-editor .neubiki-editor-paste-notice button { min-height: 44px; padding: 0 .5rem; font-weight: 500; color: #9A3412; border-radius: 4px; }
+
+[data-theme="dark"] .neubiki-editor .neubiki-preserved-block { background: #1F2937; color: #D1D5DB; }
+[data-theme="dark"] .neubiki-editor .neubiki-editor-paste-notice { background: #3D291E; color: #F3F4F6; }
+[data-theme="dark"] .neubiki-editor .neubiki-editor-paste-notice button { color: #FDBA74; }
