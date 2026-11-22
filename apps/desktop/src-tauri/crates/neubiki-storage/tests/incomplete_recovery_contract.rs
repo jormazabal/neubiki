@@ -63,7 +63,7 @@ fn incomplete_pair_exports_only_reviewed_text_without_repair_or_identity_adoptio
     assert_eq!(fs::read(folder.join("copy.json")).unwrap(), raw);
 }
 #[test]
-fn incomplete_note_extract_preserves_every_page_sample_and_content_extension_without_applying_it() {
+fn incomplete_note_extract_exports_legacy_page_samples_as_nbnote_without_applying_it() {
     let (owned, api, folder) = fixture();
     let note = json!({"schemaVersion":1,"id":"foreign::Note.knote","title":"Owned pen fixture","createdAt":"2026-11-02T12:00:00Z","updatedAt":"2026-11-02T12:00:00Z","defaultPage":{"preset":"A4","orientation":"portrait","background":"grid"},"toolPresets":[],"pages":[{"id":"page-1","title":"Owned page","size":{"width":1190,"height":1684,"unit":"px","preset":"A4"},"background":{"type":"grid","spacing":32},"strokes":[{"id":"stroke-1","tool":"pen","color":"#111827","width":2,"opacity":1,"pressure":true,"textureSeed":"owned-texture","textureVersion":1,"points":[[10,20,0.5,1,20,-10],[30,40,0.8,2,30,-15]]}],"generatedElements":[{"id":"element-1","strokeIds":["stroke-1"],"kind":"shape","text":"Owned content"}],"updatedAt":"2026-11-02T12:00:00Z"}],"ocr":{"status":"updated","textByPage":{"page-1":"Owned recognized text"}},"customAnnotation":{"preserve":"document data"}});
     let raw=serde_json::to_vec_pretty(&json!({"schemaVersion":1,"documentId":"foreign::Note.knote","content":note,"privateEnvelope":"synthetic-not-for-export"})).unwrap();
@@ -73,14 +73,15 @@ fn incomplete_note_extract_preserves_every_page_sample_and_content_extension_wit
     assert_eq!(checked["kind"], "handwritten-note");
     assert_eq!(checked["pageCount"], 1);
     assert_eq!(checked["strokeCount"], 1);
+    assert!(checked["fileName"].as_str().unwrap().ends_with(".nbnote"));
     assert_eq!(checked["text"], "");
     assert!(checked.get("content").is_none());
     assert!(checked.get("documentId").is_none());
     let frozen = api
         .freeze_incomplete_recovery(KEY, checked["revision"].as_str().unwrap(), true)
         .unwrap();
-    assert_eq!(frozen.extension(), "knote");
-    let output = owned.path().join("Recovered.knote");
+    assert_eq!(frozen.extension(), "nbnote");
+    let output = owned.path().join("Recovered.nbnote");
     api.write_system_recovery(&frozen, &output).unwrap();
     let restored: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
     assert_eq!(restored, note);
@@ -90,9 +91,18 @@ fn incomplete_note_extract_preserves_every_page_sample_and_content_extension_wit
     assert!(api
         .write_system_recovery(&frozen, &owned.path().join("Wrong.md"))
         .is_err());
+    assert!(api
+        .write_system_recovery(&frozen, &owned.path().join("Legacy.knote"))
+        .is_err());
     let cache = owned.path().join("cache");
     fs::create_dir(&cache).unwrap();
     let staged = frozen.stage(&cache).unwrap();
+    assert_eq!(staged.filename, frozen.filename());
+    assert_eq!(staged.path.file_name().unwrap(), "payload.nbnote");
+    assert_eq!(
+        staged.content_type,
+        "application/vnd.neubiki.handwritten-note+json"
+    );
     assert_eq!(
         serde_json::from_slice::<Value>(&fs::read(staged.path).unwrap()).unwrap(),
         note

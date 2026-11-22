@@ -1872,7 +1872,7 @@ fn mime_for_path(path: &Path) -> String {
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "md" | "markdown" => "text/markdown",
-        "knote" => "application/vnd.neubiki.handwritten-note+json",
+        "nbnote" | "knote" => "application/vnd.neubiki.handwritten-note+json",
         _ => "application/octet-stream",
     }
     .to_string()

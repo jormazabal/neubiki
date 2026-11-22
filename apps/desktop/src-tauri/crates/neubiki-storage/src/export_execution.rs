@@ -657,7 +657,7 @@ pub(crate) fn stage_user_export_bytes(bytes:&[u8],filename:String,content_type:S
         .extension()
         .and_then(|ext| ext.to_str())
         .ok_or("La exportación no incluye formato de archivo")?;
-    if !matches!(extension, "pdf" | "md" | "docx" | "knote" | "png" | "svg" | "json" | "zip") {
+    if !matches!(extension, "pdf" | "md" | "docx" | "nbnote" | "knote" | "png" | "svg" | "json" | "zip") {
         return Err("Formato de entrega no compatible".into());
     }
     let path = temporary.path().join(format!("payload.{extension}"));
