@@ -1,3 +1,4 @@
+import { LocalizedNoticeError } from "../../lib/i18n/protonErrors";
 import { useProtonDocumentCopy, type ProtonDocumentNotice } from "../../lib/i18n/protonDocumentCopy";
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { ArrowLeft, CloudUpload, FileText, Image as ImageIcon, Languages, Link2, PanelTop, RefreshCw, Search, Sparkles, X } from "lucide-react";
@@ -243,9 +244,9 @@ export function ProtonDocumentPane({
 
   const uploadInEditor = uploadImage && (async (file: File) => {
     const target = capture();
-    if (!target || target.editorKey !== editorKey) throw new Error(copy.errors.editorUnavailable);
+    if (!target || target.editorKey !== editorKey) throw new LocalizedNoticeError(copy.errors.editorUnavailable);
     const path = await uploadImage(target.address, file);
-    if (!validateTarget(target)) throw new Error(copy.errors.uploadChanged);
+    if (!validateTarget(target)) throw new LocalizedNoticeError(copy.errors.uploadChanged);
     return markdownImage(file.name.replace(/\.[^.]+$/, ""), path);
   });
 

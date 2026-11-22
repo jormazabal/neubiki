@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { usePortabilityCopy } from "../../lib/i18n/protonPortabilityCopy";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
@@ -46,7 +46,7 @@ export function ProtonRestoreReview({ workspace, source, connected, beforeApply,
     try {
       if (kind === "apply") { setUnresolved(true); notify.current(true); await beforeApply(); }
       const value = kind === "status" ? await getProtonRestore(scope, source) : await actOnProtonRestore(scope, source, review, kind);
-      if (!value) throw Error(t("No se encontró la restauración. Conserva el paquete y vuelve a consultar."));
+      if (!value) throw new LocalizedNoticeError(t("No se encontró la restauración. Conserva el paquete y vuelve a consultar."));
       if (mounted.current) { setReview(value); setNeedsCheck(false); setUnresolved(value.phase === "running"); if (kind !== "status") { onRestored?.(); onResult?.(value); } }
     } catch (cause) { if (mounted.current) { setError(runtimeErrorMessage(cause, t("El resultado no está confirmado. Consulta antes de continuar."))); setNeedsCheck(true); } }
     finally { finish(); }

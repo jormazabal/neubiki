@@ -51,7 +51,7 @@ it("invalidates publication consent on changes and checks a lost reply without r
   expect(screen.getByRole("button", { name: "Publicar copia nueva" })).toBeDisabled(); await user.click(consent);
   await user.type(screen.getByRole("textbox", { name: "Nombre del archivo nuevo" }), "x"); expect(screen.queryByRole("button", { name: "Publicar copia nueva" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Revisar publicación" })); await user.click(await screen.findByRole("checkbox", { name: /He revisado las plantillas/ })); await user.click(screen.getByRole("button", { name: "Publicar copia nueva" }));
-  expect(await screen.findByText("Respuesta perdida")).toBeVisible(); expect(pending).toHaveBeenLastCalledWith(true); fireEvent.keyDown(document, { key: "Escape" }); expect(options.onClose).not.toHaveBeenCalled();
+  expect(await screen.findByRole("alert")).toHaveTextContent("La respuesta no está confirmada. Consulta este mismo intento"); expect(pending).toHaveBeenLastCalledWith(true); fireEvent.keyDown(document, { key: "Escape" }); expect(options.onClose).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Comprobar resultado" })); expect(await screen.findByText("Contenido verificado")).toBeVisible(); expect(publishProtonTemplates).toHaveBeenCalledTimes(1);
   expect(checkProtonSharedTemplates).toHaveBeenCalledWith({ ...scope, purpose: "publish", operationId: "template-publish-qa" }); expect(pending).toHaveBeenLastCalledWith(false);
 });

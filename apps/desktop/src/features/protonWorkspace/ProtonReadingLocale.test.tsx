@@ -37,11 +37,12 @@ it("labels the saved worksheet, cell jump and partial window in English", async 
   expect(screen.getByText(/Partial sheet view/)).toBeVisible();
 });
 
-it("preserves native Office error details and localizes retry and the Word text description", async () => {
+it("localizes an unknown Office failure, retry and the Word text description", async () => {
   vi.mocked(readProtonOfficePreview).mockRejectedValueOnce(new Error("La revisión de Proton cambió.")).mockResolvedValueOnce({ format: "docx", revisionId: "file~rev", text: "Acta española" });
   render(<UiLocaleProvider language="en"><ProtonReferenceViewer name="Acta.docx" address={{ accountId: "account", rootId: "root", nodeId: "file" }}
     revisionId="file~rev" contentBase64="" onReload={vi.fn()} /></UiLocaleProvider>);
-  expect(await screen.findByText("La revisión de Proton cambió.")).toBeVisible();
+  expect(await screen.findByText("Could not prepare the Office preview.")).toBeVisible();
+  expect(screen.queryByText("La revisión de Proton cambió.")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByText("Text view · The Word file keeps its formatting in Proton.")).toBeVisible();
   expect(screen.getByLabelText("Text content")).toHaveTextContent("Acta española");

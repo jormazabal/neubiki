@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, FileText } from "lucide-react";
@@ -86,12 +86,12 @@ export function ProtonExportActions({ disabled, snapshot, requested, onRequestHa
       const source = snapshot();
       if (!source || source.document.markdown === null) return;
       const project = profileId.startsWith("project:");
-      if (format !== "md" && project && shared?.key !== JSON.stringify([source.address.accountId, source.address.rootId])) throw new Error(t.scopeChanged);
+      if (format !== "md" && project && shared?.key !== JSON.stringify([source.address.accountId, source.address.rootId])) throw new LocalizedNoticeError(t.scopeChanged);
       const id = project ? profileId.slice("project:".length) : profileId;
       const profile = format === "md" ? undefined : (project ? shared?.catalog.profiles : catalog?.profiles)?.find(item => item.id === id);
       const profileRevision = profile ? project ? shared?.catalog.revisionId : catalog?.revision : undefined;
-      if (format !== "md" && profileId && !profile) throw new Error(t.staleSelection);
-      if (profile && !profileRevision) throw new Error(c.profileUnverified);
+      if (format !== "md" && profileId && !profile) throw new LocalizedNoticeError(t.staleSelection);
+      if (profile && !profileRevision) throw new LocalizedNoticeError(c.profileUnverified);
       const name = source.document.node.name;
       const mobile = isTauriMobileRuntime();
       setProgress(name);

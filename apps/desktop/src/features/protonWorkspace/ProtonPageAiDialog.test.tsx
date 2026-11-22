@@ -63,7 +63,7 @@ it("checks a lost generation acknowledgement without sending the page again", as
     controller={{ getCurrent: () => opened, protect: vi.fn().mockResolvedValue(undefined), onApplied: vi.fn() }} onClose={vi.fn()} />);
   fireEvent.click(screen.getByLabelText("Confirmo el envío y su posible coste"));
   fireEvent.click(screen.getByRole("button", { name: "Reconocer página" }));
-  await screen.findByText("Respuesta interrumpida");
+  await screen.findByText("No se confirmó el resultado. Consulta el intento antes de volver a enviar.");
   fireEvent.click(screen.getByRole("button", { name: "Comprobar intento" }));
   expect(await screen.findByRole("textbox", { name: "Texto reconocido para revisar" })).toHaveValue(ready.text);
   expect(checkProtonNoteAi).toHaveBeenCalledTimes(1);

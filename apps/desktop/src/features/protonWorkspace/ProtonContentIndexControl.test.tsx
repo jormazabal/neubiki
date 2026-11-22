@@ -109,7 +109,7 @@ it("preserves confirmed counts after an uncertain clear and checks state without
   const checkbox=await open(true);
   fireEvent.click(screen.getByRole("button",{name:"Clear index…"}));
   fireEvent.click(screen.getByRole("button",{name:"Clear indexed text"}));
-  await screen.findByText("Acknowledgement interrupted");
+  await screen.findByText("The index change was not confirmed. Check its status before repeating it.");
   expect(checkbox).toBeDisabled();expect(screen.getByText("2 documents · 1 KiB")).toBeVisible();
   fireEvent.click(screen.getByRole("button",{name:"Check status"}));
   await waitFor(()=>expect(checkbox).toBeEnabled());

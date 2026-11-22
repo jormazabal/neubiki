@@ -146,7 +146,11 @@ const genericCopy = {
   unconfirmed: ["No se confirmó el resultado. Comprueba su estado antes de repetir la operación.", "The result is unconfirmed. Check its status before repeating the operation."],
 } as const;
 
+/** Only use with an authored UI message. Runtime and provider failures use stable codes. */
+export class LocalizedNoticeError extends Error {}
+
 export function getProtonErrorMessage(error: unknown, fallback: string, language: UiLanguage) {
+  if (error instanceof LocalizedNoticeError) return error.message;
   const issue = apiErrorFromNativeRejection(error);
   const locale = language === "en" ? 1 : 0;
   if (issue?.operationOutcome === "unknown") return genericCopy.unconfirmed[locale];

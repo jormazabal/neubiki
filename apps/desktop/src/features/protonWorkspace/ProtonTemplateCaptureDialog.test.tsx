@@ -35,7 +35,7 @@ it("checks a lost save response without replaying and holds the close guard unti
   const pending = vi.fn(); const options = props(); const user = userEvent.setup();
   render(<ProtonTemplateCaptureDialog {...options} onPendingChange={pending} />);
   await user.click(screen.getByRole("button", { name: "Revisar versión guardada" })); await user.click(await screen.findByRole("checkbox", { name: /He revisado el contenido/ }));
-  await user.click(screen.getByRole("button", { name: "Guardar en este dispositivo" })); expect(await screen.findByText("Respuesta perdida")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Guardar en este dispositivo" })); expect(await screen.findByText("La captura no está confirmada. Consulta su resultado antes de repetir.")).toBeVisible();
   expect(pending).toHaveBeenLastCalledWith(true); fireEvent.keyDown(document, { key: "Escape" }); expect(options.onClose).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "Guardar en este dispositivo" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Comprobar captura" })); expect(await screen.findByText(/está guardada como plantilla/)).toBeVisible();

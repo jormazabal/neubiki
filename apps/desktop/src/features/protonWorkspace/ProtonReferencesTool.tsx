@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { FileText, Image } from "lucide-react";
 import { InlineNotice } from "../../components/patterns/InlineNotice";
@@ -54,7 +54,7 @@ export function ProtonReferencesTool({ address, revisionId, connected, onOpen }:
     try {
       const next = await listProtonReferences(address, revisionId, controller.signal);
       if (controller.signal.aborted) return;
-      if (next.revisionId !== revisionId) throw new Error(t.revisionChanged);
+      if (next.revisionId !== revisionId) throw new LocalizedNoticeError(t.revisionChanged);
       setInventory(next);
     } catch (cause) {
       if (!controller.signal.aborted) setError(runtimeErrorMessage(cause, t.referencesFailed));
@@ -75,7 +75,7 @@ export function ProtonReferencesTool({ address, revisionId, connected, onOpen }:
     try {
       const next = await listProtonIncomingReferences(address, revisionId, controller.signal);
       if (controller.signal.aborted) return;
-      if (next.revisionId !== revisionId) throw new Error(t.revisionChanged);
+      if (next.revisionId !== revisionId) throw new LocalizedNoticeError(t.revisionChanged);
       setIncoming(next);
     } catch (cause) {
       if (!controller.signal.aborted) setIncomingError(runtimeErrorMessage(cause, t.incomingFailed));

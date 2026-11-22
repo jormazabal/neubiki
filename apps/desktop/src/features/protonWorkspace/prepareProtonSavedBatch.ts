@@ -1,3 +1,4 @@
+import { LocalizedNoticeError } from "../../lib/i18n/protonErrors";
 import { exportCopy } from "../../lib/i18n/exportCopy";
 import type { UiLanguage } from "../../lib/i18n/uiCopy";
 import { getExportTemplate } from "../../lib/api/config";
@@ -11,11 +12,11 @@ export async function prepareProtonSavedBatch(scope: ProtonBatchScope, nodes: Pr
   profileId: string, progress: (text: string) => void, profileSource?: "device" | "project", language: UiLanguage = "es") {
   const c = exportCopy[language];
   const profile = format === "md" ? undefined : catalog.profiles.find(item => item.id === profileId);
-  if (profileId && format !== "md" && !profile || profile && !catalog.revision) throw Error(c.profileRefresh);
+  if (profileId && format !== "md" && !profile || profile && !catalog.revision) throw new LocalizedNoticeError(c.profileRefresh);
   const resolution = format === "md" ? undefined : profile ? diagramResolution(profile) : (await getExportTemplate()).document.diagramResolution;
   const documents: Array<{ nodeId: string; revisionId: string; name: string; diagramAssets?: unknown }> = [];
   for (const [index, node] of nodes.entries()) {
-    if (!node.revisionId) throw Error(c.sourceRefresh(node.name));
+    if (!node.revisionId) throw new LocalizedNoticeError(c.sourceRefresh(node.name));
     progress(c.reviewing(index + 1, nodes.length, node.name));
     let diagramAssets: unknown;
     if (format !== "md" && resolution) {

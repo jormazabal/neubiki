@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { InlineNotice } from "../../components/patterns/InlineNotice";
@@ -30,7 +30,7 @@ export function ProtonReferenceImpactPanel({ address, name, revisionId, parentId
       const next = await readProtonReferenceImpact(address, { ...target, expectedName: name, parentId, action }, controller.signal);
       if (!controller.signal.aborted) {
         if (next.revisionId !== (folder ? null : revisionId) || next.node.nodeId !== address.nodeId
-          || next.node.type !== (folder ? "folder" : "file") || next.node.name !== name || next.action !== action) throw new Error(t.impactChanged);
+          || next.node.type !== (folder ? "folder" : "file") || next.node.name !== name || next.action !== action) throw new LocalizedNoticeError(t.impactChanged);
         setResult(next);
       }
     } catch (cause) { if (!controller.signal.aborted) { setResult(undefined); setError(runtimeErrorMessage(cause, t.impactFailed)); } }

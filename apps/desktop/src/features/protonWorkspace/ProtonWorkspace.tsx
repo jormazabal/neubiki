@@ -7,7 +7,7 @@ import { StatusTag } from "../../components/ui/StatusTag";
 import { InlineNotice } from "../../components/patterns/InlineNotice";
 import { APP_VERSION } from "../../lib/appVersion";
 import { ApiError } from "../../lib/api/client";
-import { getProtonErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, getProtonErrorMessage } from "../../lib/i18n/protonErrors";
 import * as accounts from "../../lib/api/protonDirect";
 import * as api from "../../lib/api/protonWorkspace";
 import { isMobileDeviceRuntime, isTauriRuntime } from "../../lib/runtime/platform";
@@ -693,7 +693,7 @@ export function ProtonWorkspace({ uploadImage }: {
         connected={reachable} canWrite={workspace.canWrite}
         beforeCreate={async () => {
           if (busyRef.current || exitFrozen || !reachable || !workspace.canWrite) {
-            throw new Error(copy.connectionBeforeCreate);
+            throw new LocalizedNoticeError(copy.connectionBeforeCreate);
           }
           await protect();
         }}
@@ -768,7 +768,7 @@ export function ProtonWorkspace({ uploadImage }: {
     {batchExportOpen && workspace && <Suspense fallback={<p role="status" className="proton-account-loading">{copy.loadingBatch}</p>}>
       <BatchExport workspace={workspace} connected={reachable}
         beforePrepare={async () => {
-          if (busyRef.current || exitFrozen || !reachable) throw new Error(copy.connectionBeforeExport);
+          if (busyRef.current || exitFrozen || !reachable) throw new LocalizedNoticeError(copy.connectionBeforeExport);
           await protect();
         }}
         onPendingChange={onDialogMutation} onClose={() => setBatchExportOpen(false)}

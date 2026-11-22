@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeft, Download, Folder, RefreshCw, Trash2 } from "lucide-react";
@@ -100,7 +100,7 @@ function BatchContent({ workspace, connected, beforePrepare, onPendingChange, on
     try {
       await beforePrepare();
       const project = format !== "md" && profileId.startsWith("project:");
-      if (project && (!shared || shared.outcome !== "confirmed")) throw new Error(t.staleSelection);
+      if (project && (!shared || shared.outcome !== "confirmed")) throw new LocalizedNoticeError(t.staleSelection);
       const catalog: ExportProfiles = project && shared ? { schemaVersion: 1, revision: shared.revisionId, profiles: shared.profiles, checkedAt: shared.checkedAt } : profiles;
       const value = await prepareProtonSavedBatch(scope, selected, format, catalog, project ? profileId.slice("project:".length) : profileId,
         text => { if (mounted.current) setProgress(text); }, project ? "project" : undefined, language);

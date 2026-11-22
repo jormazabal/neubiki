@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../../components/ui/Button";
@@ -41,14 +41,14 @@ export function ProtonNoteEmbedDialog({ target, validate, onInsert, onClose }: {
     try{await task();}catch(cause){if(live.current)setError(runtimeErrorMessage(cause,c.unconfirmed));}
     finally{pending.current=false;if(live.current)setBusy(false);}
   }
-  function check(){if(!validate())throw new Error(c.targetChanged);}
+  function check(){if(!validate())throw new LocalizedNoticeError(c.targetChanged);}
   async function select(nodeId:string) {
     setPreview(null);setSource(null);setPageId("");setAsset("");setReviewed(false);
     if(!nodeId)return;
     check();
     const document=await readDocument({...target.address,nodeId});
     if(!live.current)return;
-    if(!document.handwritten)throw new Error(c.sourceChanged);
+    if(!document.handwritten)throw new LocalizedNoticeError(c.sourceChanged);
     setSource({nodeId,revisionId:document.revisionId,note:document.handwritten});
     setPageId(document.handwritten.pages[0]?.id??"");
   }
@@ -70,7 +70,7 @@ export function ProtonNoteEmbedDialog({ target, validate, onInsert, onClose }: {
     const alt=`${preview.sourceName} · página ${preview.pageNumber}`;
     const label=preview.sourceName.replace(/[\r\n]/g," ").replace(/[\\[\]`*_!&<>]/g,"\\$&");
     if(!onInsert(`${markdownImage(alt,path)}\n\nPágina ${preview.pageNumber} de [${label}](${preview.sourceRelativePath})\n`))
-      throw new Error(c.insertChanged);
+      throw new LocalizedNoticeError(c.insertChanged);
     onClose();
   }
   const notes=catalog?.resources.filter(item=>item.kind==="handwritten")??[];

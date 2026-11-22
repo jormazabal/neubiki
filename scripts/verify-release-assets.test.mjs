@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -45,6 +45,22 @@ test("release verification binds both manifests to the exact platform assets", a
   await Promise.all(Object.entries(files).map(([name, data]) => writeFile(join(directory, name), data)));
   const release = await verifyReleaseAssets(directory, repository, version);
   assert.equal(release.sha256[apk], apkHash);
+
+  const baseline = JSON.parse(await readFile(new URL("./android-release-baseline.json", import.meta.url), "utf8"));
+  const receipt = {
+    validated: true,
+    applicationId: android.applicationId,
+    versionName: version,
+    versionCode: android.versionCode,
+    minimumSdk: baseline.minimumSdk,
+    certificateSha256: baseline.certificateSha256,
+    apkSha256: apkHash,
+  };
+  const receiptPath = join(directory, "packaging.json");
+  await writeFile(receiptPath, JSON.stringify(receipt));
+  await verifyReleaseAssets(directory, repository, version, receiptPath);
+  await writeFile(receiptPath, JSON.stringify({ ...receipt, certificateSha256: "incorrect certificate" }));
+  await assert.rejects(verifyReleaseAssets(directory, repository, version, receiptPath), /signed and validated Android package/);
 
   await writeFile(join(directory, apk), "incorrect APK");
   await assert.rejects(verifyReleaseAssets(directory, repository, version), /APK size or SHA-256/);

@@ -49,7 +49,7 @@ it("preserves an uncertain upload without inserting or automatically repeating i
   await prepare();
   fireEvent.click(screen.getByLabelText("He revisado la página y el destino de inserción"));
   fireEvent.click(screen.getByRole("button",{name:"Subir e insertar página"}));
-  await screen.findByText("Respuesta interrumpida");
+  await screen.findByText("No se confirmó la operación.");
   expect(screen.getByRole("button",{name:"Subir e insertar página"})).toBeDisabled();
   expect(insert).not.toHaveBeenCalled();
   expect(uploadProtonImageContent).toHaveBeenCalledOnce();

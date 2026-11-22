@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { InlineNotice } from "../../components/patterns/InlineNotice";
@@ -67,7 +67,7 @@ export function ProtonBackupControl({ scope, disabled }: { scope: ProtonBatchSco
     try {
       const newInterval = frequency === "1" ? 1 : frequency === "7" ? 7 : null;
       const next = await updateProtonBackup(scope, schedule.revision, newInterval);
-      if (!next) throw new Error(copy.unknown);
+      if (!next) throw new LocalizedNoticeError(copy.unknown);
       setSchedule(next);
       setNotice(copy.saved);
     } catch (cause) {

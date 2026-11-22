@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "../../components/ui/Button";
@@ -58,7 +58,7 @@ export function ProtonPageAiDialog({ kind, pageId, pageNumber, controller, onClo
   function current() {
     const note = controller.getCurrent();
     if (!origin.current || note?.editorKey !== origin.current.editorKey || !note.handwritten
-      || !note.handwritten.pages.some(page => page.id === pageId)) throw new Error(c.sourceChanged);
+      || !note.handwritten.pages.some(page => page.id === pageId)) throw new LocalizedNoticeError(c.sourceChanged);
     return note;
   }
 

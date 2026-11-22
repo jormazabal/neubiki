@@ -30,7 +30,7 @@ it("keeps the close guard after a lost apply reply until native status is checke
   const pending = vi.fn(); const user = userEvent.setup();
   render(<ProtonRestoreReview workspace={{ accountId: "acct", root, canWrite: true }} source={source} connected beforeApply={async () => {}} onPendingChange={pending} />);
   await user.click(await screen.findByRole("checkbox", { name: /He revisado el paquete/ })); await user.click(screen.getByRole("button", { name: "Crear copia en Proton" }));
-  expect(await screen.findByText("Respuesta perdida")).toBeVisible(); expect(pending).toHaveBeenLastCalledWith(true);
+  expect(await screen.findByText("El resultado no está confirmado. Consulta antes de continuar.")).toBeVisible(); expect(pending).toHaveBeenLastCalledWith(true);
   expect(screen.queryByRole("button", { name: "Crear copia en Proton" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Consultar estado" }));
   await waitFor(() => expect(pending).toHaveBeenLastCalledWith(false)); expect(actOnProtonRestore).toHaveBeenCalledTimes(1);

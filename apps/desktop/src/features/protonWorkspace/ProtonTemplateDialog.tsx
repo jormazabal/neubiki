@@ -1,4 +1,4 @@
-import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { LocalizedNoticeError, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { usePortabilityCopy } from "../../lib/i18n/protonPortabilityCopy";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -112,7 +112,7 @@ function TemplateContent({ accountId, connected = true, canWrite = true, root, d
         if (result.templateId !== template.id || result.revision !== template.revision
           || result.name !== fileName || typeof result.markdown !== "string"
           || (result.resources?.length ?? 0) !== (template.resources?.length ?? 0)) {
-          throw new Error(t("La vista previa no corresponde al documento y la plantilla seleccionados."));
+          throw new LocalizedNoticeError(t("La vista previa no corresponde al documento y la plantilla seleccionados."));
         }
         setPreview(result); setPreviewInput(input);
       }
