@@ -1,6 +1,6 @@
 # Cambios de Neubiki
 
-## 0.8.0 — en preparación
+## 0.8.0
 
 - Papelera y restauración, revisión de conflictos y recuperación privada de borradores, incluso sin conexión.
 - Búsqueda por nombre, contenido y significado, revisión de reemplazos y continuidad con favoritos.

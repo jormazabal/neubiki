@@ -596,6 +596,10 @@ describe("AiPromptInput", () => {
     const result=render(<div style={{transform:"translateX(20px)",overflow:"hidden",height:40}}><AiPromptInput documentId="doc-1" projectId="project-1" markdown="Contenido" providerReady onSubmit={vi.fn()} researchJob={makeResearchJob()} researchJobs={[]} onCancelResearchJob={onCancelResearchJob}/></div>);
     const trigger=screen.getByRole("button",{name:"Cancelar"});trigger.focus();await userEvent.click(trigger);
     const dialog=screen.getByRole("dialog", { name: "Cancelar investigación" });expect(dialog.parentElement).toBe(document.body);expect(result.container.inert).toBe(true);expect(screen.getByText(/Se solicitará detener el proceso. Los resultados y documentos ya guardados se conservan/)).toBeVisible();expect(screen.getByRole("button",{name:"Volver"})).toHaveFocus();
+    const layer = trigger.closest<HTMLElement>("[data-floating-layer]")!;
+    fireEvent(window, new Event("resize"));
+    expect(layer.inert).toBe(true);
+    expect(getComputedStyle(layer).visibility).toBe("visible");
     await userEvent.keyboard("{Escape}");expect(trigger).toHaveFocus();expect(onCancelResearchJob).not.toHaveBeenCalled();await userEvent.click(trigger);
     const confirm=screen.getByRole("button",{name:"Cancelar investigación"});fireEvent.click(confirm);fireEvent.click(confirm);await act(async()=>{});expect(onCancelResearchJob).toHaveBeenCalledOnce();expect(onCancelResearchJob).toHaveBeenCalledWith("job-1");expect(screen.getByRole("button",{name:"Cancelación solicitada"})).toBeDisabled();expect(screen.getByPlaceholderText(/Pregunta algo sobre este documento/)).toHaveFocus();expect(result.container.inert).toBe(false);
   });

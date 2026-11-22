@@ -99,7 +99,7 @@ pub(crate) async fn managed_native_request(
     window: tauri::WebviewWindow,
     request: NativeRequest,
     operation_id: String,
-) -> Result<Value, String> {
+) -> Result<Value, Value> {
     crate::require_workspace_window(&window)?;
     let lane = if matches!(
         &request,
@@ -110,6 +110,7 @@ pub(crate) async fn managed_native_request(
         Lane::Transfer
     };
     let admission=app.clone();
+    let request_id = operation_id.clone();
     let running=tauri::async_runtime::spawn_blocking(move||{
         {let _restart=crate::restart::admission(&admission)?;admission.state::<Operations>().submit(&operation_id,lane,2).map_err(str::to_string)?;}
         operations::start(&admission,&operation_id)
@@ -280,14 +281,18 @@ pub(crate) async fn managed_native_request(
             .await
         }
         NativeRequest::ExportDocumentMobile { request } => {
-            crate::export_document_mobile(app.clone(), window.clone(), request).await
+            let result = crate::export_document_mobile(app, window, request).await;
+            operations::finish(running, result.as_ref().ok().map(|_| true));
+            return result.map_err(|error| serde_json::json!(error.with_id(Some(&request_id))));
         }
         NativeRequest::OpenMobileExport { export_id } => {
-            crate::open_mobile_export(app.clone(), window.clone(), export_id).await
+            let result = crate::open_mobile_export(app, window, export_id).await;
+            operations::finish(running, result.as_ref().ok().map(|_| true));
+            return result.map_err(|error| serde_json::json!(error.with_id(Some(&request_id))));
         }
     };
     operations::finish(running, result.as_ref().ok().map(|_| true));
-    result
+    result.map_err(Value::String)
 }
 
 #[cfg(test)]

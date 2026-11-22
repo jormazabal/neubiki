@@ -41,7 +41,9 @@ export function FloatingLayer({ anchorRef, width, side = false, align = "start",
       if (!anchor || !layer) return;
       for (let node: HTMLElement | null = anchor; node; node = node.parentElement) {
         const style = getComputedStyle(node);
-        if (node.hidden || node.inert || node.getAttribute("aria-hidden") === "true" || style.display === "none" || style.visibility === "hidden") {
+        // ModalFrame isolates both the anchor and its portal. Keep that inert layer visible
+        // so the modal can return focus before the observer runs after isolation ends.
+        if (node.hidden || (node.inert && !layer.inert) || node.getAttribute("aria-hidden") === "true" || style.display === "none" || style.visibility === "hidden") {
           setAnchorVisible(false);
           return;
         }

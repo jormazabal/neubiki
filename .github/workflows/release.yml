@@ -100,20 +100,18 @@ jobs:
             exit 1
           }
           gh api "repos/$NEUBIKI_RELEASE_REPOSITORY/git/ref/tags/$tag" --silent
-          state="$(gh release view "$tag" --repo "$NEUBIKI_RELEASE_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)"
-          if [ "$state" = "true" ]; then
+          releases="repos/$NEUBIKI_RELEASE_REPOSITORY/releases"
+          existing="$(gh api "$releases" --paginate --jq ".[] | select(.tag_name == \"$tag\") | [.id, .draft] | @tsv")"
+          if [ -n "$existing" ]; then
+            IFS=$'\t' read -r release_id state <<< "$existing"
+            test "$state" = "true" || { echo "Refusing to replace an already published release." >&2; exit 1; }
             echo "Continuing the unpublished draft."
-          elif [ -n "$state" ]; then
-            echo "Refusing to replace an already published release." >&2
-            exit 1
-          elif [ "$ANDROID_ONLY" = "true" ]; then
-            echo "Android recovery requires an existing unpublished draft." >&2
-            exit 1
           else
-            gh release create "$tag" --repo "$NEUBIKI_RELEASE_REPOSITORY" --verify-tag --draft --title "Neubiki $version" --notes-file "docs/releases/$version.md"
+            test "$ANDROID_ONLY" != "true" || { echo "Android recovery requires an unpublished draft." >&2; exit 1; }
+            release_id="$(gh api --method POST "$releases" -f tag_name="$tag" \
+              -F draft=true -f name="Neubiki $version" -f body="$(cat "docs/releases/$version.md")" --jq .id)"
           fi
-          release_id="$(gh api "repos/$NEUBIKI_RELEASE_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$tag\" and .draft) | .id")"
-          [[ "$release_id" =~ ^[0-9]+$ ]]
+          [[ "$release_id" =~ ^[0-9]+$ ]] || { echo "Could not determine the release draft ID." >&2; exit 1; }
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   release-windows:
