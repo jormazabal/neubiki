@@ -59,7 +59,7 @@ pub fn transcript_source(root: &Path, id: &str) -> Result<Value, String> {
         });
     let destination = session.destination.as_ref();
     Ok(
-        json!({"schemaVersion":1,"sessionId":id,"revision":session.revision,"sourceRevision":metadata::hash(&raw),"createdAt":session.created_at,"title":destination.map(|d|d.name.as_str()).unwrap_or("Reunión sin destino"),"projectId":destination.map(|d|d.project_id.as_str()),"status":session.status,"samples":session.samples,"sampleRate":audio::RATE,"audioAvailable":audio_available,"segments":segments,"unconfirmedCount":unconfirmed,"wordTimingAvailable":false,"diarizationAvailable":false,"readOnly":true,"startsProvider":false,"checkedAt":neubiki_core::now_iso()}),
+        json!({"schemaVersion":1,"sessionId":id,"meeting":session.meeting,"revision":session.revision,"sourceRevision":metadata::hash(&raw),"createdAt":session.created_at,"title":destination.map(|d|d.name.as_str()).unwrap_or("Reunión sin destino"),"projectId":destination.map(|d|d.project_id.as_str()),"status":session.status,"samples":session.samples,"sampleRate":audio::RATE,"audioAvailable":audio_available,"segments":segments,"unconfirmedCount":unconfirmed,"wordTimingAvailable":false,"diarizationAvailable":false,"readOnly":true,"startsProvider":false,"checkedAt":neubiki_core::now_iso()}),
     )
 }
 

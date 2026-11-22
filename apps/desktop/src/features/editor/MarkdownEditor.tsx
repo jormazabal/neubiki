@@ -324,7 +324,7 @@ function MilkdownInstance({ active = true, readOnly = false, focusRequest = 0, m
       onPointerDownCapture={handleEditorPointerDown}
       onLoadCapture={handleEditorMediaLoad}
     >
-      {pasteNotice && <div role="alert" className="neubiki-editor-paste-notice"><p>{pasteNotice.message} El original permanece en el portapapeles.</p><div>
+      {pasteNotice && <div role="alert" className="neubiki-editor-paste-notice" data-tone="warning"><p>{pasteNotice.message} El original permanece en el portapapeles.</p><div>
         {pasteNotice.plainText && <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => {
           const view = viewRef.current;
           if (view && insertClipboardPlainText(view, pasteNotice)) setPasteNotice(null);
@@ -332,7 +332,7 @@ function MilkdownInstance({ active = true, readOnly = false, focusRequest = 0, m
         }}>Pegar solo el texto</button>}
         <button type="button" onClick={() => setPasteNotice(null)}>Cerrar aviso</button>
       </div></div>}
-      {imageUploadError && <div role="alert" className="neubiki-editor-paste-notice"><p>{imageUploadError}</p><button type="button" onClick={()=>setImageUploadError(null)}>Cerrar aviso de imagen</button></div>}
+      {imageUploadError && <div role="alert" className="neubiki-editor-paste-notice" data-tone="error"><p>{imageUploadError}</p><button type="button" onClick={()=>setImageUploadError(null)}>Cerrar aviso de imagen</button></div>}
       <Milkdown />
       {imageEditOverlay ? (
         <div

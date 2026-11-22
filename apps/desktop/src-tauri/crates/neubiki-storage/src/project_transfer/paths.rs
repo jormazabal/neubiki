@@ -23,8 +23,8 @@ pub(super) fn validate(path: &str) -> Result<(), String> {
 
 pub(super) fn kind(path: &str) -> Option<FileKind> {
     match path.rsplit('.').next()?.to_ascii_lowercase().as_str() {
-        "md" | "markdown" => Some(FileKind::Markdown),
-        "knote" => Some(FileKind::Handwritten),
+        "md" | "markdown" | "mdown" => Some(FileKind::Markdown),
+        "knote" | "nbnote" => Some(FileKind::Handwritten),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" => Some(FileKind::Image),
         "pdf" | "docx" | "xlsx" | "pptx" | "txt" | "csv" => Some(FileKind::Attachment),
         "woff" | "woff2" | "ttf" | "otf" => Some(FileKind::Asset),

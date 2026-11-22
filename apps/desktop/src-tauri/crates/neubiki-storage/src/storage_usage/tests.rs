@@ -77,6 +77,33 @@ fn entry_and_time_budgets_are_explicit_partial_results_not_empty_complete_usage(
 }
 
 #[test]
+fn proton_device_storage_measures_only_selected_families_without_paths_or_contents() {
+    let device = tempfile::tempdir().unwrap();
+    let root = device.path();
+    fs::create_dir_all(root.join("proton-workspace/drafts")).unwrap();
+    fs::create_dir(root.join("proton-ai-history")).unwrap();
+    fs::write(root.join("proton-workspace/drafts/journal.json"), b"private-draft").unwrap();
+    fs::write(root.join("proton-ai-history/history.json"), b"private-history").unwrap();
+    fs::write(root.join("projects.json"), b"unreadable-registry-must-be-ignored").unwrap();
+    let api = LocalApi::new(root.to_owned(), "qa".into(), "test".into());
+    let response = api.handle("GET", "/api/proton/device/storage", Value::Null, vec![]).unwrap();
+    assert_eq!(response.body["families"], json!([
+        {"id":"proton-recovery","state":"complete","files":1,"logicalBytes":13},
+        {"id":"ai-history","state":"complete","files":1,"logicalBytes":15},
+        {"id":"recordings","state":"complete","files":0,"logicalBytes":0},
+    ]));
+    let encoded = response.body.to_string();
+    assert!(!encoded.contains("private-draft") && !encoded.contains("private-history") && !encoded.contains("journal.json"));
+    assert!(!encoded.contains("appDataPath") && !encoded.contains("locations"));
+    assert!(LocalApi::is_independent_snapshot("GET", "/api/proton/device/storage"));
+    assert_eq!(fs::read(root.join("proton-workspace/drafts/journal.json")).unwrap(), b"private-draft");
+
+    let recordings = if cfg!(debug_assertions) { "recordings-dev" } else { "recordings" };
+    fs::write(root.join(recordings), b"not-an-expected-directory").unwrap();
+    assert_eq!(api.proton_device_storage().unwrap()["families"][2], json!({"id":"recordings","state":"unavailable"}));
+}
+
+#[test]
 fn native_read_route_is_independent_and_corrupt_catalogs_are_not_silently_empty_or_modified() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("config.json"), b"future-private").unwrap();

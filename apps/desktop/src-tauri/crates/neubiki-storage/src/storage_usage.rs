@@ -170,7 +170,61 @@ fn measure(root: &Path, limits: Limits) -> Result<Measurement, String> {
     Ok(result)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceFamily {
+    id: &'static str,
+    #[serde(flatten)]
+    usage: DeviceFamilyUsage,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+enum DeviceFamilyUsage {
+    Complete { files: usize, logical_bytes: u64 },
+    Partial { files: usize, logical_bytes: u64 },
+    Unavailable,
+}
+
+fn device_family_usage(root: &Path, segments: &[&str]) -> DeviceFamilyUsage {
+    let mut path = root.to_path_buf();
+    for segment in segments {
+        path.push(segment);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() && !batch::linked(&metadata) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return DeviceFamilyUsage::Complete { files: 0, logical_bytes: 0 };
+            }
+            _ => return DeviceFamilyUsage::Unavailable,
+        }
+    }
+    match measure(&path, Limits { entries: 4_000, duration: Duration::from_millis(650) }) {
+        Ok(snapshot) if snapshot.complete => DeviceFamilyUsage::Complete {
+            files: snapshot.files, logical_bytes: snapshot.logical_bytes,
+        },
+        Ok(snapshot) => DeviceFamilyUsage::Partial {
+            files: snapshot.files, logical_bytes: snapshot.logical_bytes,
+        },
+        Err(_) => DeviceFamilyUsage::Unavailable,
+    }
+}
+
 impl LocalApi {
+    pub(super) fn proton_device_storage(&self) -> Result<Value, String> {
+        let root = self.pd_private_root();
+        if !fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.is_dir() && !batch::linked(&metadata)) {
+            return Err("No se puede consultar el almacenamiento de este dispositivo.".into());
+        }
+        let active_recordings = if cfg!(debug_assertions) { "recordings-dev" } else { "recordings" };
+        let locations: [(&str, &[&str]); 3] = [
+            ("proton-recovery", &["proton-workspace", "drafts"]),
+            ("ai-history", &["proton-ai-history"]),
+            ("recordings", &[active_recordings]),
+        ];
+        let families = locations.map(|(id, directories)| DeviceFamily { id, usage: device_family_usage(&root, directories) });
+        Ok(json!({"schemaVersion":1,"checkedAt":neubiki_core::now_iso(),"families":families}))
+    }
+
     pub(super) fn storage_usage(&self) -> Result<Value, String> {
         let measurement = measure(
             &self.app_data_dir,

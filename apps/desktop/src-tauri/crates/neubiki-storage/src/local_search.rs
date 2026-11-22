@@ -128,7 +128,7 @@ fn matched_excerpt(line: &str, needle: &str) -> Option<String> {
     )
 }
 
-fn note_text_pages(content: &str) -> Result<Vec<(usize, String, String)>, &'static str> {
+pub(crate) fn note_text_pages(content: &str) -> Result<Vec<(usize, String, String)>, &'static str> {
     let note: Value =
         serde_json::from_str(content).map_err(|_| "nota no legible; se conserva sin consultar")?;
     document_validation::handwritten(&note)

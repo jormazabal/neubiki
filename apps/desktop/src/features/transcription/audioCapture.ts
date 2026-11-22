@@ -16,28 +16,34 @@ export async function startPcmAudioCapture(onChunk: (chunk: ArrayBuffer) => void
     },
   });
 
-  const audioContext = new AudioContext();
-  await audioContext.audioWorklet.addModule("/audio-worklets/neubiki-pcm-processor.js");
-  const source = audioContext.createMediaStreamSource(stream);
-  const processor = new AudioWorkletNode(audioContext, "neubiki-pcm-processor");
-  processor.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-    if (event.data.byteLength > 0) onChunk(event.data);
-  };
+  let audioContext: AudioContext | undefined;
+  try {
+    const context = audioContext = new AudioContext();
+    await context.audioWorklet.addModule("/audio-worklets/neubiki-pcm-processor.js");
+    const source = context.createMediaStreamSource(stream);
+    const processor = new AudioWorkletNode(context, "neubiki-pcm-processor");
+    processor.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      if (event.data.byteLength > 0) onChunk(event.data);
+    };
+    source.connect(processor);
+    processor.connect(context.destination);
 
-  source.connect(processor);
-  processor.connect(audioContext.destination);
-
-  return {
-    async stop() {
-      processor.port.onmessage = null;
-      try {
-        source.disconnect();
-        processor.disconnect();
-      } catch {
-        // Already disconnected.
-      }
-      stream.getTracks().forEach((track) => track.stop());
-      await audioContext.close();
-    },
-  };
+    return {
+      async stop() {
+        processor.port.onmessage = null;
+        try {
+          source.disconnect();
+          processor.disconnect();
+        } catch {
+          // Already disconnected.
+        }
+        stream.getTracks().forEach(track => track.stop());
+        await context.close();
+      },
+    };
+  } catch (error) {
+    stream.getTracks().forEach(track => track.stop());
+    await audioContext?.close().catch(() => undefined);
+    throw error;
+  }
 }

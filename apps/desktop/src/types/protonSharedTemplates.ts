@@ -1,0 +1,12 @@
+import type { DocumentTemplateCatalogEntry, TemplateCatalogSelection, TemplateCatalogExportSelection } from "./documentTemplates";
+import type { ProtonNode } from "./protonWorkspace";
+export type SharedTemplateScope = { accountId: string; rootId: string };
+export type SharedTemplateImportOutcome = { index: number; name: string; status: "new" | "existing" | "conflict" | "blocked" | "imported" | "observed" | "not-recorded" | "unconfirmed"; message: string; template: { id: string; name: string; revision: string } | null };
+export type SharedTemplatePublishReview = SharedTemplateScope & { schemaVersion: 1; name: string; digest: string; reviewDigest: string; byteLength: number; catalog: DocumentTemplateCatalogEntry[]; checkedAt: string };
+export type SharedTemplateImportReview = Omit<SharedTemplatePublishReview, "name"> & { source: ProtonNode; outcomes: SharedTemplateImportOutcome[] };
+export type SharedTemplateReceipt = SharedTemplateScope & { schemaVersion: 1; purpose: "publish" | "import"; operationId: string; state: "pending" | "confirmed" | "observed" | "conflict" | "complete" | "partial" | "not-recorded"; active: boolean; checkedAt: string; digest?: string; name?: string; source?: ProtonNode | null; node?: ProtonNode | null; outcomes?: SharedTemplateImportOutcome[] | null; detail?: string | null };
+export type SharedTemplateList = SharedTemplateScope & { schemaVersion: 1; items: ProtonNode[]; partial: boolean; attempts: SharedTemplateReceipt[]; offset: number; totalAttempts: number; checkedAt: string };
+export type SharedTemplatePublishInput = SharedTemplateScope & { name: string; entries: TemplateCatalogExportSelection };
+export type SharedTemplateImportInput = SharedTemplateScope & { nodeId: string; revisionId: string; entries: TemplateCatalogSelection; digest?: string };
+export type SharedTemplatePublishRequest = SharedTemplatePublishInput & { operationId: string; digest: string; reviewDigest: string; acknowledge: true };
+export type SharedTemplateImportRequest = SharedTemplateImportInput & { operationId: string; digest: string; reviewDigest: string; acknowledge: true; reviewedResources: true };

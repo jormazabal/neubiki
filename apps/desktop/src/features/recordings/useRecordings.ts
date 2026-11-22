@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { recordingRequest } from "../../lib/api/recordings";
+import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { useRecordingCopy } from "../../lib/i18n/recordingCopy";
 import type { RecordingSnapshot } from "../../types/recording";
 export function useRecordings(active = true) {
+  const runtimeErrorMessage = useRuntimeErrorMessage();
+  const { copy } = useRecordingCopy();
   const [snapshot, setSnapshot] = useState<RecordingSnapshot | null>(null);
-  const [snapshotError, setSnapshotError] = useState<string | null>(null);
-  const [commandError, setCommandError] = useState<string | null>(null);
+  const [snapshotError, setSnapshotError] = useState<{ cause: unknown } | null>(null);
+  const [commandError, setCommandError] = useState<{ cause: unknown } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
   const running = useRef(false);
@@ -32,7 +36,7 @@ export function useRecordings(active = true) {
         const next = await task;
         if (alive) { apply(next); setSnapshotError(null); }
       } catch (e) {
-        if (alive) setSnapshotError(String(e));
+        if (alive) setSnapshotError({ cause: e });
       } finally {
         if (snapshotRequest.current === task) snapshotRequest.current = null;
         if (alive) timer = setTimeout(poll, 500);
@@ -55,7 +59,7 @@ export function useRecordings(active = true) {
         apply(next);
         return next;
       } catch (e) {
-        setCommandError(String(e));
+        setCommandError({ cause: e });
         return null;
       } finally {
         running.current = false;
@@ -64,5 +68,6 @@ export function useRecordings(active = true) {
     },
     [apply],
   );
-  return { snapshot, error: commandError ?? snapshotError, busy, command };
+  const issue = commandError ?? snapshotError;
+  return { snapshot, error: issue ? runtimeErrorMessage(issue.cause, commandError ? copy.commandFailed : copy.readFailed) : null, busy, command };
 }

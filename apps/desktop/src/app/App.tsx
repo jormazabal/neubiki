@@ -4242,7 +4242,7 @@ export function App() {
     }
 
     if (action === "export-knote" || action === "export-note-png" || action === "export-note-svg" || action === "export-note-pdf") {
-      const format: HandwrittenExportFormat = action === "export-knote" ? "knote" : action === "export-note-png" ? "png" : action === "export-note-svg" ? "svg" : "pdf";
+      const format: HandwrittenExportFormat = action === "export-knote" ? "nbnote" : action === "export-note-png" ? "png" : action === "export-note-svg" ? "svg" : "pdf";
       void handleExportHandwrittenNote(node.id, format);
       return;
     }

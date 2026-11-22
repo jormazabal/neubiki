@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { UiLocaleProvider } from "../../lib/i18n/UiLocale";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 
 describe("MarkdownToolbar", () => {
@@ -9,6 +10,18 @@ describe("MarkdownToolbar", () => {
     Object.defineProperty(window, "matchMedia", { value: undefined, configurable: true });
   });
   const keyboardProps={historyOpen:false,historyEnabled:true,historyDisabledReason:"",editorReady:true,markdownZoomPercent:100,activeActions:{},editorHistoryState:{canUndo:true,canRedo:false,undoDepth:1,redoDepth:0},onRunEditorAction:vi.fn(),onExportDocument:vi.fn(),onMarkdownZoomChange:vi.fn(),onToggleHistory:vi.fn()};
+  it("localizes the compact and contextual toolbar without changing editor actions", async () => {
+    mockCompactToolbarMode(true);
+    const onRunEditorAction = vi.fn();
+    render(<UiLocaleProvider language="en"><MarkdownToolbar {...keyboardProps} onRunEditorAction={onRunEditorAction} /></UiLocaleProvider>);
+    const trigger = within(screen.getByRole("toolbar", { name: "Document tools" })).getByRole("button", { name: "More options" });
+    await userEvent.click(trigger);
+    const palette = screen.getByRole("dialog", { name: "Text formatting" });
+    expect(within(palette).getByRole("button", { name: "Close text formatting" })).toBeVisible();
+    await userEvent.click(within(palette).getByRole("button", { name: "Block format" }));
+    await userEvent.click(within(palette).getByRole("menuitem", { name: "Heading 2" }));
+    expect(onRunEditorAction).toHaveBeenCalledWith("heading-2");
+  });
   it("keeps an available tab stop when responsive CSS hides the previous focused control",()=>{render(<MarkdownToolbar {...keyboardProps}/>);const bold=screen.getByRole("button",{name:"Negrita"}),block=screen.getByRole("button",{name:"Formato de bloque"});bold.focus();expect(bold.tabIndex).toBe(0);bold.style.display="none";fireEvent.resize(window);expect(block.tabIndex).toBe(0);expect(within(screen.getByRole("toolbar")).getAllByRole("button").filter(b=>b.tabIndex===0&&!b.hasAttribute("disabled"))).toEqual([block]);});
   it("uses one toolbar tab stop and Arrow/Home/End navigation omitting disabled actions",async()=>{render(<MarkdownToolbar {...keyboardProps}/>);const toolbar=screen.getByRole("toolbar"),first=screen.getByRole("button",{name:"Formato de bloque"});expect(within(toolbar).getAllByRole("button").filter(b=>b.tabIndex===0&&!b.hasAttribute("disabled"))).toHaveLength(1);first.focus();await userEvent.keyboard("{ArrowRight}");expect(screen.getByRole("button",{name:"Negrita"})).toHaveFocus();await userEvent.keyboard("{End}");expect(screen.getByRole("button",{name:"Deshacer"})).toHaveFocus();await userEvent.keyboard("{ArrowRight}");expect(first).toHaveFocus();await userEvent.keyboard("{ArrowLeft}");expect(screen.getByRole("button",{name:"Deshacer"})).toHaveFocus();await userEvent.keyboard("{Home}");expect(first).toHaveFocus();});
   it("opens menus from either keyboard direction and returns on Escape or activation",async()=>{const run=vi.fn(),outer=vi.fn();render(<main onKeyDown={outer}><MarkdownToolbar {...keyboardProps} onRunEditorAction={run}/></main>);const trigger=screen.getByRole("button",{name:"Formato de bloque"});trigger.focus();await userEvent.keyboard("{ArrowDown}");expect(screen.getByRole("menuitem",{name:"Normal"})).toHaveFocus();await userEvent.keyboard("{End}");expect(screen.getByRole("menuitem",{name:"Título 6"})).toHaveFocus();await userEvent.keyboard("{ArrowDown}");expect(screen.getByRole("menuitem",{name:"Normal"})).toHaveFocus();outer.mockClear();fireEvent.keyDown(document.activeElement!,{key:"Escape",isComposing:true});expect(screen.getByRole("menu")).toBeInTheDocument();outer.mockClear();await userEvent.keyboard("{Escape}");expect(trigger).toHaveFocus();expect(outer).not.toHaveBeenCalled();await userEvent.keyboard("{ArrowUp}");expect(screen.getByRole("menuitem",{name:"Título 6"})).toHaveFocus();await userEvent.keyboard("{Home}{ArrowDown}{Enter}");expect(run).toHaveBeenCalledWith("heading-1");expect(run).toHaveBeenCalledOnce();expect(trigger).toHaveFocus();expect(screen.queryByRole("menu")).not.toBeInTheDocument();});

@@ -15,6 +15,7 @@ export type RecordingDestination = {
   name: string;
 };
 export type RecordingSession = {
+  meeting?: boolean;
   portableOrigin?: {schemaVersion:1;identity:string;projectId:string;sourceSha256:string;microphoneSha256:string|null;systemSha256:string|null};
   id: string;
   revision: number;

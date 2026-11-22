@@ -1,4 +1,5 @@
 //! Bounded local conversion into one frozen ZIP; delivery is a separate reviewed native intent.
+mod restore_receipts;
 use super::*;
 use std::{
     fs,
@@ -83,6 +84,8 @@ struct Job {
     format: String,
     profile_name: Option<String>,
     rows: Vec<Row>,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    source_metadata: Value,
     archive_sha256: String,
     archive_bytes: u64,
     checked_at: String,
@@ -129,7 +132,7 @@ fn store(api: &LocalApi, j: &Job) -> Result<(), String> {
     .map_err(|_| "Entrega sin confirmar; consulta antes de repetir".into())
 }
 fn public(j: &Job) -> Value {
-    json!({"schemaVersion":1,"id":j.id,"projectId":j.project_id,"revision":j.revision,"phase":j.phase,"format":j.format,"profileName":j.profile_name,"documents":j.rows,"archiveSha256":j.archive_sha256,"archiveBytes":j.archive_bytes,"checkedAt":j.checked_at,"includesConfirmedDrafts":true,"frozen":true})
+    json!({"schemaVersion":1,"id":j.id,"projectId":j.project_id,"revision":j.revision,"phase":j.phase,"format":j.format,"profileName":j.profile_name,"documents":j.rows,"archiveSha256":j.archive_sha256,"archiveBytes":j.archive_bytes,"checkedAt":j.checked_at,"includesConfirmedDrafts":j.source_metadata.is_null(),"sourceMetadata":j.source_metadata,"frozen":true})
 }
 pub fn is_export_batch_work(method: &str, path: &str) -> bool {
     method == "POST"
@@ -218,6 +221,17 @@ pub fn dispatch_export_batch(
             prepared.push((relative, item));
         }
     }
+    freeze_batch(source, project, q.format, profile.map(|p| p.name), prepared.into_iter().map(|(relative, item)| {
+        let (name, _, bytes) = item.render()?.batch_payload();
+        Ok((relative, name, bytes))
+    }), resources, Value::Null)
+}
+
+pub(super) fn freeze_batch(
+    source: &LocalApi, project: &str, format: String, profile_name: Option<String>,
+    prepared: impl IntoIterator<Item = Result<(String, String, Vec<u8>), String>>,
+    resources: BTreeMap<String, Vec<u8>>, source_metadata: Value,
+) -> ApiResult {
     let directory = source.app_data_dir.join("export-batches");
     if !directory.exists() {
         fs::create_dir(&directory).map_err(|_| "No se pudo preparar la carpeta de lotes")?;
@@ -283,11 +297,19 @@ pub fn dispatch_export_batch(
     );
     let options =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let package = source_metadata["kind"] == "proton-project-package";
+    if package {
+        for directory in source_metadata["manifest"]["directories"].as_array().ok_or("Carpetas de paquete no válidas")? {
+            let path = directory.as_str().ok_or("Carpeta de paquete no válida")?;
+            for part in path.split('/') { portable_paths::component(part)?; }
+            zip.add_directory(format!("{path}/"), options).map_err(|_|"No se pudo conservar una carpeta vacía")?;
+        }
+    }
     let mut rows = vec![];
     let mut used = BTreeSet::new();
     let mut total = 0u64;
-    for (relative, item) in prepared {
-        let (name, _, bytes) = item.render()?.batch_payload();
+    for item in prepared {
+        let (relative, name, bytes) = item?;
         let parent = Path::new(&relative).parent().unwrap_or(Path::new(""));
         let mut target = parent.join(name).to_string_lossy().replace('\\', "/");
         let base = target.clone();
@@ -331,16 +353,26 @@ pub fn dispatch_export_batch(
             .map_err(|_| "Recurso no preparado")?;
         zip.write_all(&bytes).map_err(|_| "Recurso incompleto")?;
     }
-    zip.start_file("neubiki-export-manifest.json", options)
-        .map_err(|_| "No se pudo preparar el manifiesto")?;
-    zip.write_all(&serde_json::to_vec(&json!({"format":"neubiki.document-exports","schemaVersion":1,"documents":rows,"frozen":true})).map_err(|_|"Manifiesto no representable")?).map_err(|_|"Manifiesto incompleto")?;
+    if package {
+        zip.start_file("neubiki-project.json", options).map_err(|_|"Manifiesto de proyecto no preparado")?;
+        zip.write_all(&serde_json::to_vec(&source_metadata["manifest"]).map_err(|_|"Manifiesto no representable")?)
+            .map_err(|_|"Manifiesto incompleto")?;
+    } else {
+        // The private receipt owns local account/root identity; a shared ZIP contains only file provenance.
+        let manifest_metadata = if source_metadata.is_null() { Value::Null } else {
+            json!({"kind":source_metadata["kind"],"results":source_metadata["results"],"includesPrivateDrafts":false})
+        };
+        zip.start_file("neubiki-export-manifest.json", options)
+            .map_err(|_| "No se pudo preparar el manifiesto")?;
+        zip.write_all(&serde_json::to_vec(&json!({"format":"neubiki.document-exports","schemaVersion":1,"documents":rows,"sourceMetadata":manifest_metadata,"frozen":true})).map_err(|_|"Manifiesto no representable")?).map_err(|_|"Manifiesto incompleto")?;
+    }
     let file = zip.finish().map_err(|_| "El lote no se pudo finalizar")?;
     file.sync_all()
         .map_err(|_| "El lote no se pudo confirmar en disco")?;
     drop(file);
     let (hash, archive_bytes) = file_hash(&payload, 512 * 1024 * 1024)?;
     let revision = sha256_hex(
-        &serde_json::to_vec(&json!([project, id, hash, rows]))
+        &serde_json::to_vec(&json!([project, id, hash, rows, source_metadata]))
             .map_err(|_| "Revisión no representable")?,
     );
     let job = Job {
@@ -349,14 +381,16 @@ pub fn dispatch_export_batch(
         project_id: project.into(),
         revision,
         phase: "prepared".into(),
-        format: q.format,
-        profile_name: profile.map(|p| p.name),
+        format,
+        profile_name,
         rows,
+        source_metadata,
         archive_sha256: hash,
         archive_bytes,
         checked_at: neubiki_core::now_iso(),
     };
     let encoded=serde_json::to_vec(&job).map_err(|_|"Revisión no representable")?;
+    if encoded.len()>128*1024 {return Err("La revisión del lote supera su límite de128KiB".into());}
     if retained.saturating_add(archive_bytes).saturating_add(encoded.len() as u64)>recovery_quotas::EXPORT_BATCH_BYTES {return Err("Las preparaciones alcanzan1GiB; conserva o retira las conocidas".into());}
     atomic_io::create(
         &dir.join("review.json"),
@@ -381,10 +415,18 @@ impl LocalApi {
         {
             j.phase = "uncertain".into();
         }
+        if j.source_metadata["kind"] == "proton-project-package" && matches!(j.phase.as_str(),"prepared"|"cancelled") {
+            if let Err(detail)=self.verify_proton_package_archive(&folder(self,id)?.join("payload.zip"),&j.source_metadata["manifest"]) {
+                let mut view=public(&j);view["phase"]=json!("uncertain");view["verificationError"]=json!(detail);return Ok(view);
+            }
+        }
         Ok(public(&j))
     }
     pub(crate) fn export_batch_catalog(&self, p: &str) -> Result<Value, String> {
         self.project_root(p)?;
+        self.scoped_export_batch_catalog(p)
+    }
+    pub(super) fn scoped_export_batch_catalog(&self, p: &str) -> Result<Value, String> {
         let d = self.app_data_dir.join("export-batches");
         let mut rows = vec![];
         if d.exists() {
@@ -406,7 +448,7 @@ impl LocalApi {
                 }
                 let j = load(self, &name)?;
                 if j.project_id == p && j.phase != "discarded" {
-                    rows.push(public(&j));
+                    rows.push(self.export_batch_status(&j.id)?);
                 }
             }
         }
@@ -428,14 +470,16 @@ impl LocalApi {
                     .into(),
             );
         }
+        if !j.source_metadata.is_null() { self.proton_batch_scope(&j.source_metadata)?; }
         let payload = folder(self, id)?.join("payload.zip");
         let (hash, size) = file_hash(&payload, 512 * 1024 * 1024)?;
         if size != j.archive_bytes || hash != j.archive_sha256 {
             return Err("El lote cambió; no se entrega".into());
         }
+        if j.source_metadata["kind"] == "proton-project-package" { self.verify_proton_package_archive(&payload,&j.source_metadata["manifest"])?; }
         let staged = export_execution::stage_user_export_file(
             &payload,
-            "Documentos-neubiki.zip".into(),
+            if j.source_metadata["kind"] == "proton-project-package" { "Proyecto.neubiki-project.zip".into() } else { "Documentos-neubiki.zip".into() },
             cache,
         )?;
         j.phase = "picking".into();
@@ -542,6 +586,35 @@ mod tests {
         .unwrap();
         let id = doc_id(&p, "a.md");
         (d, a, p, id)
+    }
+    #[test]
+    fn proton_batch_frozen_review_survives_restart_without_a_local_project() {
+        let (directory, api, _, _) = fixture();
+        let scope = "proton-saved-scope";
+        assert!(api.project_root(scope).is_err());
+        let metadata = json!({"kind":"proton-saved-revisions","accountId":"account","rootId":"v~root",
+            "includesPrivateDrafts":false,"results":[{"nodeId":"v~doc","revisionId":"v~doc~r1","name":"Acta.md","status":"included"}]});
+        let job = freeze_batch(&api, scope, "md".into(), None,
+            vec![Ok(("Documentos/01/Acta.md".into(),"Acta.md".into(),b"# Saved".to_vec()))],
+            BTreeMap::new(),metadata.clone()).unwrap().body;
+        assert_eq!(job["includesConfirmedDrafts"],false);
+        let restarted = LocalApi::new(directory.path().join("state"),"qa".into(),"test".into());
+        let catalog = restarted.scoped_export_batch_catalog(scope).unwrap();
+        assert_eq!(catalog["items"][0]["sourceMetadata"], metadata);
+        let id=job["id"].as_str().unwrap();
+        let mut zip=zip::ZipArchive::new(fs::File::open(folder(&restarted,id).unwrap().join("payload.zip")).unwrap()).unwrap();
+        let mut text=String::new();
+        zip.by_name("Documentos/01/Acta.md").unwrap().read_to_string(&mut text).unwrap();
+        assert_eq!(text,"# Saved");
+        let mut manifest=String::new();
+        zip.by_name("neubiki-export-manifest.json").unwrap().read_to_string(&mut manifest).unwrap();
+        let shared=serde_json::from_str::<Value>(&manifest).unwrap();
+        assert_eq!(shared["sourceMetadata"]["results"],metadata["results"]);
+        assert!(shared["sourceMetadata"].get("accountId").is_none());
+        assert!(shared["sourceMetadata"].get("rootId").is_none());
+        drop(zip);
+        restarted.discard_export_batch(id,json!({"revision":job["revision"],"acknowledge":true})).unwrap();
+        assert!(restarted.scoped_export_batch_catalog(scope).unwrap()["items"].as_array().unwrap().is_empty());
     }
     #[test] fn portability_block_new_preparations_respect_budget_inventory_and_retained_identity(){
         let (_d,a,p,id)=fixture();let view=a.handle("GET","/api/recovery/storage",Value::Null,vec![]).unwrap().body;

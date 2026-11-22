@@ -45,7 +45,10 @@ class MeetingRecordingService:Service() {
                 if(action=="stop") {
                     val sessions=result.getJSONArray("sessions")
                     val session=(0 until sessions.length()).map{sessions.getJSONObject(it)}.firstOrNull{it.optString("id")==id}
-                    if(session?.optString("status")=="ready") {RecordingBridge.command("queue",JSONObject().put("id",id));RecordingWorker.enqueue(this)}
+                    if (session != null && session.optString("status") == "ready" && !session.optBoolean("meeting")) {
+                        RecordingBridge.command("queue", JSONObject().put("id", id))
+                        RecordingWorker.enqueue(this)
+                    }
                     getSystemService(NotificationManager::class.java).notify(NOTIFICATION,notification(if(session?.isNull("destination")==true)"Grabación guardada · Elegir carpeta" else "Grabación guardada",false))
                     stopForeground(STOP_FOREGROUND_DETACH);stopSelf()
                 }else getSystemService(NotificationManager::class.java).notify(NOTIFICATION,notification(if(paused)"En pausa" else "Grabando"))

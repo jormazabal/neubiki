@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AiSkillsSettings } from "./AiSkillsSettings";
 import { getAiSkill, listAiSkills, previewAiSkillSelection, validateAiSkill } from "../../lib/api/skills";
+import { UiLocaleProvider } from "../../lib/i18n/UiLocale";
 
 vi.mock("../../lib/api/skills", () => ({
   listAiSkills: vi.fn(),
@@ -147,5 +148,38 @@ describe("AiSkillsSettings", () => {
 
     await waitFor(() => expect(validateAiSkill).toHaveBeenCalledWith("neubiki.mermaid"));
     expect(await screen.findByText("Skill valida")).toBeInTheDocument();
+  });
+
+  it("localizes the English inspector while preserving original skill text, manifests and diagnostics", async () => {
+    render(<UiLocaleProvider language="en"><AiSkillsSettings /></UiLocaleProvider>);
+    expect(screen.getByRole("heading", { name: "AI skills" })).toBeVisible();
+    expect(await screen.findByRole("tablist", { name: "Skill details" })).toBeVisible();
+    expect(screen.getAllByText(mermaidSkill.description).length).toBeGreaterThan(0);
+    const sourceFilter = screen.getByRole("combobox", { name: "Filter by source" });
+    fireEvent.change(sourceFilter, { target: { value: "user" } });
+    expect(screen.getByText("No skills match these filters.")).toBeVisible();
+    fireEvent.change(sourceFilter, { target: { value: "base" } });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Instructions" }));
+    const instructions = screen.getByRole("tabpanel", { name: "Instructions" });
+    expect(instructions.querySelector("pre")?.textContent).toBe(mermaidDetail.instructionsMarkdown);
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Instructions" }), { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Manifest" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel", { name: "Manifest" }).querySelector("pre")?.textContent).toBe(mermaidDetail.manifestJson);
+    fireEvent.click(screen.getByRole("tab", { name: "Examples" }));
+    expect(within(screen.getByRole("tabpanel", { name: "Examples" })).getByText("ejemplo.md")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Prompt to test selection" }), { target: { value: "Compara dos opciones." } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Expected action" }), { target: { value: "insert_diagram" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview selection" }));
+    expect(await screen.findByText("mermaid / diagram_flow")).toBeVisible();
+    expect(previewAiSkillSelection).toHaveBeenCalledWith({ prompt: "Compara dos opciones.", expectedAction: "insert_diagram" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Validate skill" }));
+    const diagnostics = within(await screen.findByRole("tabpanel", { name: "Diagnostics" }));
+    expect(diagnostics.getByText("Skill valida")).toBeVisible();
+    expect(diagnostics.getByText("Manifest disponible.")).toBeVisible();
+    expect(validateAiSkill).toHaveBeenCalledWith("neubiki.mermaid");
   });
 });

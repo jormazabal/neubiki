@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_ref:
-        description: Existing release tag to build (empty uses the selected workflow ref)
+        description: Existing source tag to build, matching v<VERSION>
         type: string
-        default: ""
+        required: true
       android_only:
         description: Recover Android assets without rebuilding verified Windows installers
         type: boolean
@@ -16,19 +16,35 @@ permissions:
   contents: write
   actions: read
 
+env:
+  NEUBIKI_RELEASE_REPOSITORY: ${{ vars.NEUBIKI_RELEASE_REPOSITORY || github.repository }}
+
+concurrency:
+  group: neubiki-release-${{ inputs.release_ref }}
+  cancel-in-progress: false
+
 jobs:
   release-preflight:
     name: Check release signing inputs
     # A repaired unpublished tag is dispatched explicitly for the affected
     # platform so already verified packages are not built or replaced again.
-    if: ${{ vars.NEUBIKI_RELEASE_CHANNEL_CONFIGURED == 'true' }}
     runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+      source_sha: ${{ steps.source.outputs.sha }}
 
     steps:
+      - name: Require a configured channel
+        env:
+          CHANNEL_CONFIGURED: ${{ vars.NEUBIKI_RELEASE_CHANNEL_CONFIGURED }}
+        run: test "$CHANNEL_CONFIGURED" = "true" || { echo "The Neubiki release channel is not configured." >&2; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_ref || github.ref }}
+          ref: refs/tags/${{ inputs.release_ref }}
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -40,17 +56,20 @@ jobs:
         with:
           node-version: 22.22.2
 
-      - name: Validate Android recovery tag
-        if: ${{ inputs.android_only }}
+      - name: Validate release source tag
+        id: source
         shell: bash
         env:
           REQUESTED_REF: ${{ inputs.release_ref }}
         run: |
-          test "$REQUESTED_REF" = "v$(cat VERSION)" || { echo "Android recovery requires the exact VERSION tag." >&2; exit 1; }
-          test "$(git describe --tags --exact-match HEAD)" = "$REQUESTED_REF"
+          test "$REQUESTED_REF" = "v$(cat VERSION)" || { echo "The source tag must match VERSION." >&2; exit 1; }
+          test "$(git rev-parse "refs/tags/$REQUESTED_REF^{commit}")" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor HEAD origin/main
           node scripts/check-version.mjs
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Check signing inputs
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -58,29 +77,50 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: pnpm release:secrets:check
+          ANDROID_ONLY: ${{ inputs.android_only }}
+        run: |
+          if [ "$ANDROID_ONLY" = "true" ]; then
+            node scripts/check-release-secrets.mjs --android-only
+          else
+            pnpm release:secrets:check
+          fi
 
       - name: Prepare unpublished release for parallel platform builds
+        id: draft
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.NEUBIKI_RELEASE_TOKEN || github.token }}
+          ANDROID_ONLY: ${{ inputs.android_only }}
         run: |
           version="$(cat VERSION)"
           tag="v$version"
-          state="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          node scripts/release-channel.mjs android
+          test "$(gh repo view "$NEUBIKI_RELEASE_REPOSITORY" --json visibility --jq .visibility)" = "PUBLIC" || {
+            echo "The update manifests and assets must be reachable without GitHub credentials." >&2
+            exit 1
+          }
+          gh api "repos/$NEUBIKI_RELEASE_REPOSITORY/git/ref/tags/$tag" --silent
+          state="$(gh release view "$tag" --repo "$NEUBIKI_RELEASE_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)"
           if [ "$state" = "true" ]; then
             echo "Continuing the unpublished draft."
           elif [ -n "$state" ]; then
             echo "Refusing to replace an already published release." >&2
             exit 1
+          elif [ "$ANDROID_ONLY" = "true" ]; then
+            echo "Android recovery requires an existing unpublished draft." >&2
+            exit 1
           else
-            gh release create "$tag" --verify-tag --draft --title "Neubiki $version" --notes-file "docs/releases/$version.md"
+            gh release create "$tag" --repo "$NEUBIKI_RELEASE_REPOSITORY" --verify-tag --draft --title "Neubiki $version" --notes-file "docs/releases/$version.md"
           fi
+          release_id="$(gh api "repos/$NEUBIKI_RELEASE_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$tag\" and .draft) | .id")"
+          [[ "$release_id" =~ ^[0-9]+$ ]]
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   release-windows:
     name: Build Windows release draft
     runs-on: windows-latest
     needs: release-preflight
+    environment: release
     if: ${{ inputs.android_only != true }}
     env:
       CARGO_BUILD_JOBS: "2"
@@ -91,7 +131,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_ref || github.ref }}
+          ref: ${{ needs.release-preflight.outputs.source_sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -160,33 +200,39 @@ jobs:
           "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "WINDOWS_TIMESTAMP_URL=http://timestamp.digicert.com" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Configure Windows update channel
+        run: node scripts/release-channel.mjs windows
+
       - name: Build Tauri Windows release
         uses: tauri-apps/tauri-action@v0.6.2
         env:
           TAURI_NEUBIKI_FONT_LICENSE: ${{ github.workspace }}/apps/desktop/src-tauri/crates/neubiki-docs/assets/fonts/OFL.txt
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.NEUBIKI_RELEASE_TOKEN || github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TAURI_CONFIG: '{"build":{"beforeBuildCommand":""}}'
         with:
           projectPath: apps/desktop
+          owner: ${{ env.NEUBIKI_RELEASE_OWNER }}
+          repo: ${{ env.NEUBIKI_RELEASE_REPO }}
+          releaseId: ${{ needs.release-preflight.outputs.release_id }}
           tagName: ${{ env.NEUBIKI_RELEASE_TAG }}
           releaseName: Neubiki ${{ env.NEUBIKI_RELEASE_VERSION }}
           releaseBody: See docs/releases/${{ env.NEUBIKI_RELEASE_VERSION }}.md for release notes. For Windows, install the MSI asset; the NSIS executable is attached as a secondary asset.
           releaseDraft: true
           prerelease: false
           tauriScript: pnpm tauri
+          args: --config "${{ env.NEUBIKI_WINDOWS_RELEASE_CONFIG_PATH }}" --target x86_64-pc-windows-msvc --bundles msi,nsis
           includeUpdaterJson: true
           updaterJsonPreferNsis: false
 
       - name: Attach Proton notices and corresponding sources
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.NEUBIKI_RELEASE_TOKEN || github.token }}
         run: |
           $source = @(Get-ChildItem -LiteralPath output -Filter '*proton-sources*.zip')
           if ($source.Count -ne 1) { throw 'Expected exactly one Proton corresponding-source archive.' }
-          gh release upload "$env:NEUBIKI_RELEASE_TAG" $source[0].FullName --clobber
+          gh release upload "$env:NEUBIKI_RELEASE_TAG" $source[0].FullName --repo "$env:NEUBIKI_RELEASE_REPOSITORY" --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Corresponding-source upload failed.' }
 
       - name: Preserve Windows packaging evidence
@@ -201,10 +247,53 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  verify-draft:
+    name: Verify complete release draft
+    runs-on: ubuntu-latest
+    environment: release
+    needs: [release-preflight, release-windows, release-android]
+    if: ${{ !cancelled() && needs.release-preflight.result == 'success' && needs.release-android.result == 'success' && (needs.release-windows.result == 'success' || inputs.android_only) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-preflight.outputs.source_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-android-evidence
+          path: ${{ runner.temp }}/neubiki-android-evidence
+      - name: Download and verify release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.NEUBIKI_RELEASE_TOKEN || github.token }}
+        run: |
+          version="$(cat VERSION)"
+          assets="$RUNNER_TEMP/neubiki-release-assets"
+          gh release download "v$version" --repo "$NEUBIKI_RELEASE_REPOSITORY" --dir "$assets" \
+            --pattern 'latest.json' --pattern 'android-latest.json' --pattern '*.msi' \
+            --pattern '*-setup.exe' --pattern '*.sig' --pattern '*.apk' --pattern 'neubiki-proton-*.zip'
+          apk_receipt="$(find "$RUNNER_TEMP/neubiki-android-evidence" -type f -name packaging.json)"
+          test -f "$apk_receipt"
+          node scripts/verify-release-assets.mjs "$assets" "$NEUBIKI_RELEASE_REPOSITORY" "$version" "$apk_receipt"
+      - name: Verify Windows assets against the enrolled Tauri public key
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          assets="$RUNNER_TEMP/neubiki-release-assets"
+          node -p "Buffer.from(require('./apps/desktop/src-tauri/tauri.conf.json').plugins.updater.pubkey, 'base64').toString('ascii').trimEnd()" > "$assets/neubiki.pub"
+          for installer in "$assets"/*.msi "$assets"/*-setup.exe; do
+            base64 --decode "$installer.sig" > "$installer.minisig"
+            minisign -V -m "$installer" -p "$assets/neubiki.pub" -x "$installer.minisig"
+          done
+
   release-android:
-    name: Build and upload Android private APK
+    name: Build and upload Android APK
     if: ${{ !cancelled() && needs.release-preflight.result == 'success' }}
     runs-on: ubuntu-latest
+    environment: release
     needs:
       - release-preflight
     env:
@@ -214,7 +303,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_ref || github.ref }}
+          ref: ${{ needs.release-preflight.outputs.source_sha }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -277,6 +366,9 @@ jobs:
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/neubiki-android-release.jks"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/neubiki-android-release.jks" >> "$GITHUB_ENV"
 
+      - name: Configure Android update channel
+        run: node scripts/release-channel.mjs android
+
       - name: Build signed Android APK
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -296,13 +388,13 @@ jobs:
             --out output/android-latest.json \
             --version "$VERSION" \
             --abi arm64-v8a \
-            --url "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/$(basename "$APK")" \
-            --notes-url "https://github.com/${{ github.repository }}/releases/tag/v${VERSION}"
+            --url "https://github.com/${NEUBIKI_RELEASE_REPOSITORY}/releases/download/v${VERSION}/$(basename "$APK")" \
+            --notes-url "https://github.com/${NEUBIKI_RELEASE_REPOSITORY}/releases/tag/v${VERSION}"
 
       - name: Upload Android release assets
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$NEUBIKI_RELEASE_TAG" output/Neubiki-android-arm64-v*.apk output/android-latest.json "output/release-${NEUBIKI_RELEASE_VERSION}/android/neubiki-proton-android-sources.zip" --clobber
+          GH_TOKEN: ${{ secrets.NEUBIKI_RELEASE_TOKEN || github.token }}
+        run: gh release upload "$NEUBIKI_RELEASE_TAG" output/Neubiki-android-arm64-v*.apk output/android-latest.json "output/release-${NEUBIKI_RELEASE_VERSION}/android/neubiki-proton-android-sources.zip" --repo "$NEUBIKI_RELEASE_REPOSITORY" --clobber
 
       - name: Preserve Android packaging evidence
         if: always()

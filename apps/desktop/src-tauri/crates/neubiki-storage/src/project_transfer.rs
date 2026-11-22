@@ -1,6 +1,10 @@
 //! Verifiable project packages. Portable data never carries runtime configuration or authority.
 use super::*;
 mod archive;
+mod proton_package;
+mod proton_restore;
+pub use proton_restore::{dispatch_proton_restore,is_proton_restore_work};
+pub use proton_package::{dispatch_proton_package,is_proton_package_work};
 mod backup_snapshot;
 pub(crate) use backup_snapshot::{create_scheduled_backup_archive,verify_scheduled_backup_archive,publish_scheduled_backup_archive,create_scheduled_backup_import,scheduled_backup_import_status,backup_snapshot_coordinate};
 mod archive_index;

@@ -1,5 +1,5 @@
 use base64::Engine;
-use neubiki_storage::{LocalApi, LocalApiResponse};
+use neubiki_storage::LocalApi;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::http::{header, Response, StatusCode, Uri};
@@ -19,6 +19,7 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 
 mod runtime_dispatch;
+mod runtime_errors;
 
 mod navigation_policy;
 mod operations;
@@ -27,6 +28,7 @@ mod restart;
 mod workspace_exit;
 mod runtime_services;
 use runtime_dispatch::{LocalApiRequest, LocalApiState};
+use runtime_errors::{request_code, runtime_reply, RuntimeFailure};
 static PROJECT_LOCATION_GATE:Mutex<()> = Mutex::new(());
 
 fn require_workspace_window(window:&tauri::WebviewWindow)->Result<(),String> {
@@ -39,37 +41,54 @@ fn trace_timestamp() -> String {
         .unwrap_or_else(|_| "unknown-time".to_string())
 }
 
-fn runtime_reply<T:serde::Serialize>(id:&str,result:Result<T,String>)->Result<serde_json::Value,String>{let mut value=serde_json::to_value(result?).map_err(|_|"invalid-runtime-response")?;let object=value.as_object_mut().ok_or("invalid-runtime-response")?;object.insert("protocolVersion".into(),serde_json::json!(1));object.insert("operationId".into(),serde_json::json!(id));object.insert("completedAt".into(),serde_json::json!(neubiki_core::now_iso()));Ok(value)}
-
 #[tauri::command]
 async fn local_api_request(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     request: LocalApiRequest,
     operation_id: Option<String>,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, RuntimeFailure> {
     if !neubiki_core::window_policy::allows_local_api(window.label(),&request.method,&request.path) {
-        return Err("Esta operación no está disponible desde esta ventana".into());
+        return Err(RuntimeFailure::window_denied().with_id(operation_id.as_deref()));
     }
+    let code = request_code(&request.path);
+    let may_change_state = request.method != "GET"
+        && !neubiki_storage::is_proton_ai_review_work(&request.method, &request.path);
+    let request_id = operation_id.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let operation_id=operations::admit(&app,&request,operation_id)?;
+        let operation_id = operations::admit(&app, &request, operation_id.clone())
+            .map_err(|error| RuntimeFailure::admission(&error, operation_id.as_deref()))?;
         let api = app.state::<LocalApiState>();
-        let running=operations::start(&app,&operation_id)?;
+        let running = operations::start(&app, &operation_id)
+            .map_err(|error| RuntimeFailure::admission(&error, Some(&operation_id)))?;
         let _context=running.bind();
-        let result=(|| {
-        let owner=neubiki_storage::reviewed_location_owner(&request.method,&request.path,request.body.as_ref().unwrap_or(&serde_json::Value::Null));
-        let _location_guard=if owner.is_some(){Some(PROJECT_LOCATION_GATE.lock().map_err(|_|"No se puede revisar la actividad del proyecto")?)}else{None};
-        if let Some(owner)=owner {
-            let snapshot=app.state::<neubiki_recording::RecordingService>().request("snapshot",serde_json::json!({}))?;
-            if neubiki_storage::location_recording_blocker(&snapshot,&owner){return Err("El proyecto tiene grabaciones pendientes o en curso. Finalízalas o cambia su destino antes de revincularlo".into());}
-        }
-        api.request(request)
+        let result = (|| {
+            let owner = neubiki_storage::reviewed_location_owner(
+                &request.method,
+                &request.path,
+                request.body.as_ref().unwrap_or(&serde_json::Value::Null),
+            );
+            let _location = if let Some(owner) = owner {
+                let guard = PROJECT_LOCATION_GATE.lock()
+                    .map_err(|_| RuntimeFailure::rejected(503, "runtime-recording-failed"))?;
+                let snapshot = app.state::<neubiki_recording::RecordingService>()
+                    .request("snapshot", serde_json::json!({}))
+                    .map_err(|_| RuntimeFailure::rejected(503, "runtime-recording-failed"))?;
+                if neubiki_storage::location_recording_blocker(&snapshot, &owner) {
+                    return Err(RuntimeFailure::rejected(409, "runtime-location-recording-blocked"));
+                }
+                Some(guard)
+            } else {
+                None
+            };
+            api.request(request)
+                .map_err(|error| RuntimeFailure::service_failure(&error, code, may_change_state))
         })();
         operations::finish(running,result.as_ref().ok().map(|response|response.status<400));
-        runtime_reply(&operation_id,result)
+        runtime_reply(&operation_id, result, code, may_change_state)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|_| RuntimeFailure::service(code, may_change_state).with_id(request_id.as_deref()))?
 }
 
 #[tauri::command]
@@ -78,13 +97,27 @@ async fn local_api_content(
     window: tauri::WebviewWindow,
     request: LocalApiRequest,
     operation_id: Option<String>,
-) -> Result<serde_json::Value, String> {
-    if !neubiki_core::window_policy::allows_workspace_command(window.label()) {return Err("El contenido documental solo está disponible en el espacio principal".into());}
+) -> Result<serde_json::Value, RuntimeFailure> {
+    if !neubiki_core::window_policy::allows_workspace_command(window.label()) {
+        return Err(RuntimeFailure::window_denied().with_id(operation_id.as_deref()));
+    }
+    let request_id = operation_id.clone();
+    let code = if neubiki_storage::is_export_content_request(&request.method, &request.path) {
+        "runtime-transfer-failed"
+    } else {
+        "runtime-content-unavailable"
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        let operation_id=operations::admit_content(&app,&request,operation_id)?;
+        let operation_id = operations::admit_content(&app, &request, operation_id.clone())
+            .map_err(|error| RuntimeFailure::admission(&error, operation_id.as_deref()))?;
         let api = app.state::<LocalApiState>();
-        let running=operations::start(&app,&operation_id)?;
+        let running = operations::start(&app, &operation_id)
+            .map_err(|error| RuntimeFailure::admission(&error, Some(&operation_id)))?;
         let _context=running.bind();
+        if let Some(failure) = api.1.request_scope_failure("GET", &request.path) {
+            operations::finish(running, Some(false));
+            return runtime_reply(&operation_id, Ok(failure), code, false);
+        }
         let result=(|| {
         if neubiki_storage::is_export_content_request(&request.method,&request.path) {
             return neubiki_storage::dispatch_export_content(&api.0,&api.3,&request.path,request.body.unwrap_or(serde_json::Value::Null));
@@ -97,39 +130,52 @@ async fn local_api_content(
         )
         })();
         operations::finish(running,result.as_ref().ok().map(|response|response.status<400));
-        runtime_reply(&operation_id,result)
+        runtime_reply(&operation_id, result.map_err(|error| RuntimeFailure::service_failure(&error, code, false)), code, false)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|_| RuntimeFailure::service(code, false).with_id(request_id.as_deref()))?
 }
 
 #[tauri::command]
-async fn export_document_mobile(app:tauri::AppHandle,window:tauri::WebviewWindow,request:LocalApiRequest)->Result<serde_json::Value,String> {
-    require_workspace_window(&window)?;
-    if !neubiki_storage::is_export_content_request(&request.method,&request.path){return Err("La entrega móvil necesita una exportación documental válida".into());}
+async fn export_document_mobile(app:tauri::AppHandle,window:tauri::WebviewWindow,request:LocalApiRequest)->Result<serde_json::Value,RuntimeFailure> {
+    require_workspace_window(&window).map_err(|_| RuntimeFailure::window_denied())?;
+    if !neubiki_storage::is_export_content_request(&request.method, &request.path) {
+        return Err(RuntimeFailure::rejected(400, "invalid-runtime-request"));
+    }
     #[cfg(target_os="android")]
-    return tauri::async_runtime::spawn_blocking(move||{
-        let request_id=neubiki_core::compact_id("export");
-        let cache=app.path().app_cache_dir().map_err(|error|error.to_string())?;
-        let api=app.state::<LocalApiState>();
-        let staged=neubiki_storage::stage_export_content(&api.0,&api.3,&request.path,request.body.unwrap_or(serde_json::Value::Null),&cache)?;
-        let mut result=android_exports::save(&app,&staged)?;
-        if !matches!(result["status"].as_str(),Some("saved"|"cancelled")){return Err("No se pudo confirmar el resultado de la entrega".into());}
-        result["requestId"]=serde_json::json!(request_id);result["completedAt"]=serde_json::json!(neubiki_core::now_iso());Ok(result)
-    }).await.map_err(|error|error.to_string())?;
+    return tauri::async_runtime::spawn_blocking(move || {
+        let code = "runtime-transfer-failed";
+        let request_id = neubiki_core::compact_id("export");
+        let cache = app.path().app_cache_dir().map_err(|_| RuntimeFailure::rejected(503, code))?;
+        let api = app.state::<LocalApiState>();
+        let staged = neubiki_storage::stage_export_content(
+            &api.0, &api.3, &request.path, request.body.unwrap_or(serde_json::Value::Null), &cache,
+        ).map_err(|_| RuntimeFailure::rejected(500, code))?;
+        let mut result = android_exports::save(&app, &staged)
+            .map_err(|_| RuntimeFailure::unconfirmed(code))?;
+        if !matches!(result["status"].as_str(), Some("saved" | "cancelled")) {
+            return Err(RuntimeFailure::unconfirmed(code));
+        }
+        result["requestId"] = serde_json::json!(request_id);
+        result["completedAt"] = serde_json::json!(neubiki_core::now_iso());
+        Ok(result)
+    }).await.map_err(|_| RuntimeFailure::unconfirmed("runtime-transfer-failed"))?;
     #[cfg(not(target_os="android"))]
-    {let _=(app,request);Err("La entrega móvil solo está disponible en Android".into())}
+    {let _=(app,request);Err(RuntimeFailure::rejected(501, "runtime-transfer-unavailable"))}
 }
 #[tauri::command]
-async fn open_mobile_export(app:tauri::AppHandle,window:tauri::WebviewWindow,export_id:String)->Result<serde_json::Value,String> {
-    require_workspace_window(&window)?;
+async fn open_mobile_export(app:tauri::AppHandle,window:tauri::WebviewWindow,export_id:String)->Result<serde_json::Value,RuntimeFailure> {
+    require_workspace_window(&window).map_err(|_| RuntimeFailure::window_denied())?;
     #[cfg(target_os="android")]
-    return tauri::async_runtime::spawn_blocking(move||{
-        let mut result=android_exports::open(&app,&export_id)?;
-        result["exportId"]=serde_json::json!(export_id);result["completedAt"]=serde_json::json!(neubiki_core::now_iso());Ok(result)
-    }).await.map_err(|error|error.to_string())?;
+    return tauri::async_runtime::spawn_blocking(move || {
+        let mut result = android_exports::open(&app,&export_id)
+            .map_err(|_| RuntimeFailure::service("runtime-content-unavailable", false))?;
+        result["exportId"] = serde_json::json!(export_id);
+        result["completedAt"] = serde_json::json!(neubiki_core::now_iso());
+        Ok(result)
+    }).await.map_err(|_| RuntimeFailure::service("runtime-content-unavailable", false))?;
     #[cfg(not(target_os="android"))]
-    {let _=(app,export_id);Err("La entrega móvil solo está disponible en Android".into())}
+    {let _=(app,export_id);Err(RuntimeFailure::rejected(501, "runtime-transfer-unavailable"))}
 }
 
 #[tauri::command]
@@ -340,6 +386,16 @@ pub fn run() {
             );
             #[cfg(target_os = "android")]
             let api=android_recording::local_api().map_err(std::io::Error::other)?;
+            let history_api = api.clone();
+            let _ = std::thread::Builder::new()
+                .name("neubiki-ai-history-retention".into())
+                .spawn(move || loop {
+                    let _ = history_api.expire_proton_ai_history();
+                    let _ = history_api.expire_proton_research_receipts();
+                    let _ = history_api.cleanup_proton_note_ai();
+                    let _ = history_api.expire_proton_replacement_reviews();
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                });
             // The Proton URL contains an ephemeral fragment key: open natively.
             let browser_app=app.handle().clone();
             neubiki_storage::initialize_proton_browser(Box::new(move |url| {
@@ -362,6 +418,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             local_api_request,
             managed_native::managed_native_request,
+            restart::desktop_update_channel_enabled,
             restart::prepare_runtime_restart,
             restart::release_runtime_restart,
             workspace_exit::confirm_workspace_exit,
@@ -467,6 +524,6 @@ mod tests {
 
 #[cfg(test)]mod runtime_block_contract_tests{
  use super::*;
- #[test]fn runtime_block_wire_envelope_is_correlated_and_future_arguments_are_rejected(){let value=runtime_reply("operation-owned-contract",Ok(LocalApiResponse{status:200,body:serde_json::json!({"owned":true})})).unwrap();assert_eq!(value["protocolVersion"],1);assert_eq!(value["operationId"],"operation-owned-contract");assert_eq!(value["body"]["owned"],true);assert!(OffsetDateTime::parse(value["completedAt"].as_str().unwrap(),&Rfc3339).is_ok());assert!(serde_json::from_value::<LocalApiRequest>(serde_json::json!({"method":"GET","path":"/health","futureExecution":true})).is_err());}
+ #[test]fn runtime_block_wire_envelope_is_correlated_and_future_arguments_are_rejected(){let value=runtime_reply("operation-owned-contract",Ok(neubiki_storage::LocalApiResponse{status:200,body:serde_json::json!({"owned":true})}),"runtime-request-failed",false).unwrap();assert_eq!(value["protocolVersion"],1);assert_eq!(value["operationId"],"operation-owned-contract");assert_eq!(value["body"]["owned"],true);assert!(OffsetDateTime::parse(value["completedAt"].as_str().unwrap(),&Rfc3339).is_ok());assert!(serde_json::from_value::<LocalApiRequest>(serde_json::json!({"method":"GET","path":"/health","futureExecution":true})).is_err());}
  #[test]fn runtime_block_authentication_dispatch_does_not_wait_for_document_mutations(){let root=std::env::temp_dir().join(neubiki_core::compact_id("neubiki-runtime-contract"));let api=LocalApi::new(root.join("state"),"qa".into(),"test".into());let state=std::sync::Arc::new(LocalApiState(Mutex::new(api.clone()),api,Mutex::new(()),Mutex::new(()),Mutex::new(())));let _busy=state.0.lock().unwrap();let worker=state.clone();let(tx,rx)=std::sync::mpsc::channel();let thread=std::thread::spawn(move||{let result=worker.request(LocalApiRequest{method:"POST".into(),path:"/api/auth/github/device/start".into(),body:None,files:None});tx.send(result.is_ok()).unwrap();});assert!(rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap());thread.join().unwrap();}
 }

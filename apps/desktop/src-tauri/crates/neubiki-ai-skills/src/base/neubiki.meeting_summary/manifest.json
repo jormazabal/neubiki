@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 2,
+  "id": "neubiki.meeting_summary",
+  "name": "Resumen de reuniones",
+  "version": "1.0.0",
+  "source": "base",
+  "description": "Prepara un resumen o un acta para revisar a partir de una transcripción con fragmentos identificados.",
+  "categories": ["meeting", "transcription"],
+  "capabilities": ["meeting_summary"],
+  "outputActions": ["summarize_meeting"],
+  "requires": [],
+  "validators": ["meeting.source"],
+  "runtimeEnabled": true,
+  "modes": [
+    {
+      "id": "summary",
+      "name": "Resumen ejecutivo",
+      "description": "Sintetiza los temas centrales, las decisiones y los asuntos pendientes.",
+      "whenToUse": ["La persona elige un resumen breve."],
+      "whenNotToUse": ["La persona necesita un acta detallada."],
+      "supportedActions": ["summarize_meeting"],
+      "requiresCapabilities": [],
+      "validators": ["meeting.source"],
+      "riskLevel": "low",
+      "contextBudget": 1500
+    },
+    {
+      "id": "minutes",
+      "name": "Acta estructurada",
+      "description": "Organiza contexto, acuerdos, próximos pasos y cuestiones abiertas sin inferir responsables ni fechas.",
+      "whenToUse": ["La persona elige un acta estructurada."],
+      "whenNotToUse": ["La persona solo necesita una síntesis breve."],
+      "supportedActions": ["summarize_meeting"],
+      "requiresCapabilities": [],
+      "validators": ["meeting.source"],
+      "riskLevel": "low",
+      "contextBudget": 1500
+    }
+  ]
+}

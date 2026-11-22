@@ -31,6 +31,35 @@ impl LocalApiState {
         if neubiki_storage::is_scheduled_backup_work(&request.method, &request.path) {
             return self.1.handle(&request.method, &request.path, request.body.unwrap_or(serde_json::Value::Null), request.files.unwrap_or_default());
         }
+        if request.method == "POST" && request.path.starts_with("/api/proton/templates/shared/") {
+            let _queue = self.3.lock().map_err(|_| "No se puede reservar el catálogo de plantillas")?;
+            return self.1.handle(&request.method, &request.path, request.body.unwrap_or_default(), vec![]);
+        }
+        if request.method == "POST" && matches!(request.path.as_str(), "/api/proton/templates/package"|"/api/proton/templates/source/prepare"|"/api/proton/templates/capture"|"/api/proton/templates/capture/check") {
+            let _queue=self.3.lock().map_err(|_|"No se puede reservar la plantilla")?;
+            return self.1.handle(&request.method,&request.path,request.body.unwrap_or(serde_json::Value::Null),vec![]);
+        }
+        if neubiki_storage::is_proton_restore_work(&request.method, &request.path) {
+            let _queue=self.3.lock().map_err(|_|"No se puede reservar la restauración")?;
+            return neubiki_storage::dispatch_proton_restore(&self.1,&request.path,request.body.unwrap_or(serde_json::Value::Null));
+        }
+        if neubiki_storage::is_proton_package_work(&request.method, &request.path) {
+            let _queue=self.3.lock().map_err(|_|"No se puede reservar la copia")?;
+            return neubiki_storage::dispatch_proton_package(&self.1,request.body.unwrap_or(serde_json::Value::Null));
+        }
+        if neubiki_storage::is_proton_backup_work(&request.method, &request.path) {
+            let Ok(_queue) = self.3.try_lock() else {
+                return Ok(LocalApiResponse { status: 200, body: serde_json::Value::Null });
+            };
+            return neubiki_storage::dispatch_proton_backup(&self.1, request.body.unwrap_or(serde_json::Value::Null));
+        }
+        if neubiki_storage::is_proton_export_batch_work(&request.method, &request.path) {
+            let _queue = self.3.lock().map_err(|_| "No se puede reservar la exportación")?;
+            return neubiki_storage::dispatch_proton_export_batch(&self.1, request.body.unwrap_or(serde_json::Value::Null));
+        }
+        if neubiki_storage::is_proton_ai_review_work(&request.method, &request.path) {
+            return self.1.handle(&request.method, &request.path, request.body.unwrap_or_default(), vec![]);
+        }
         if neubiki_storage::is_export_batch_work(&request.method,&request.path){let _queue=self.3.lock().map_err(|_|"No se puede reservar la exportación")?;let project=request.path.trim_matches('/').split('/').nth(2).map(neubiki_core::percent_decode).ok_or("Proyecto no válido")?;return neubiki_storage::dispatch_export_batch(&self.0,&self.1,&project,request.body.unwrap_or(serde_json::Value::Null));}
         if neubiki_storage::is_slow_runtime_work(&request.method,&request.path){return neubiki_storage::dispatch_slow_runtime(&self.0,&self.1,&request.method,&request.path,request.body.unwrap_or(serde_json::Value::Null));}
         if neubiki_storage::asset_work_request(&request.method,&request.path).is_some(){

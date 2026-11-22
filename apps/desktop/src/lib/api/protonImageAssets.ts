@@ -5,15 +5,16 @@ export type ProtonGeneratedImage = {
   contentBase64: string;
   contentType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
   usageRecorded: boolean;
+  historySaved?: boolean;
 };
 
 const maxImageBytes = 8 * 1024 * 1024;
 const imageTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
-export async function generateProtonImage(address: ProtonDocumentKey, baseRevisionId: string, prompt: string) {
+export async function generateProtonImage(address: ProtonDocumentKey, baseRevisionId: string, prompt: string, retainHistory = false) {
   const image = await requestJson<ProtonGeneratedImage>("/api/proton/ai/image", {
     method: "POST",
-    body: JSON.stringify({ ...address, baseRevisionId, prompt }),
+    body: JSON.stringify({ ...address, baseRevisionId, prompt, ...(retainHistory ? { retainHistory: true } : {}) }),
     timeoutMs: 240_000,
   });
   if (!imageTypes.has(image.contentType) || typeof image.contentBase64 !== "string" || !image.contentBase64) {

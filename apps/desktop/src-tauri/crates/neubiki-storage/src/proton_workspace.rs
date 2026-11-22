@@ -1,7 +1,23 @@
 //! Proton is the workspace. The only local records are the chosen folder and
 //! private recovery data for edits whose outcome may still be in doubt.
 
-use super::{atomic_io, batch, draft_store, LocalApi, LocalApiResponse};
+use super::{atomic_io, batch, draft_store, LocalApi, LocalApiFile, LocalApiResponse};
+mod ai_sources;
+pub(super) use ai_sources::{AiSource, AiSourceContent, AiSourceRef};
+mod semantic_project;
+pub(super) use semantic_project::MAX_PROJECT_CANDIDATES;
+mod workspace_resources;
+mod workspace_favorites;
+mod workspace_profiles;
+mod workspace_trash;
+mod workspace_office;
+mod batch_export;
+mod template_capture;
+mod shared_templates;
+pub(crate) use template_capture::{SavedTemplateSource,SavedTemplateAsset};
+mod package_export;
+mod package_restore;
+mod search;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use neubiki_proton::Error as ProviderError;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -14,7 +30,18 @@ use std::{
 };
 
 const MAX_MARKDOWN_BYTES: usize = 4 * 1024 * 1024;
+const MAX_NOTE_BYTES: usize = 8 * 1024 * 1024;
+mod handwritten;
+mod note_merge;
+mod note_embed;
+mod note_ai;
+mod replacements;
+mod batch_edit;
+mod workspace_recovery;
+mod meeting_publication;
+mod references;
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_IMPORTED_FILE_BYTES: usize = 8 * 1024 * 1024;
 // Both architectures passed installed acceptance with regular revision uploads.
 const VERIFIED_REVISION_WRITES: bool = cfg!(any(
     all(windows, target_arch = "x86_64"),
@@ -56,6 +83,8 @@ struct RemoteRead {
     node: Node,
     revision_id: String,
     content_base64: String,
+    #[serde(default)]
+    ancestor_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -65,7 +94,7 @@ struct RevisionAck {
     revision_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct DocumentScope {
     account_id: String,
@@ -80,9 +109,15 @@ struct Journal {
     document_id: String,
     last_generation: u64,
     markdown: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_kind: Option<String>,
     draft: Option<DraftRecord>,
     attempt: Option<Attempt>,
     receipt: Option<Receipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner: Option<workspace_recovery::RecoveryOwner>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    copies: Vec<workspace_recovery::ResolutionCopy>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -121,20 +156,22 @@ enum SaveState {
 }
 
 #[derive(Debug)]
-struct Error {
+pub(super) struct Error {
     status: u16,
     code: String,
     detail: String,
+    outcome_unknown: bool,
 }
 
 type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
-    fn new(status: u16, code: &str, detail: &str) -> Self {
+    pub(super) fn new(status: u16, code: &str, detail: &str) -> Self {
         Self {
             status,
             code: code.into(),
             detail: detail.into(),
+            outcome_unknown: false,
         }
     }
 
@@ -151,6 +188,7 @@ impl Error {
             status: 503,
             code: "proton-recovery-unavailable".into(),
             detail,
+            outcome_unknown: false,
         }
     }
 
@@ -169,6 +207,20 @@ impl Error {
             "El borrador cambió. Consulta la versión conservada.",
         )
     }
+
+    pub(super) fn response(self, outcome: Option<&str>) -> LocalApiResponse {
+        let mut body = json!({"code":self.code,"detail":self.detail});
+        let outcome = if self.outcome_unknown { Some("unknown") } else { outcome };
+        if let Some(outcome) = outcome {
+            body["operationOutcome"] = json!(outcome);
+        }
+        LocalApiResponse { status: self.status, body }
+    }
+
+    pub(super) fn unconfirmed(mut self) -> Self {
+        self.outcome_unknown = true;
+        self
+    }
 }
 
 impl From<ProviderError> for Error {
@@ -177,12 +229,21 @@ impl From<ProviderError> for Error {
             "auth-required" | "session-revoked" | "needs-reconnect" | "account-not-found" => 401,
             "permission-denied" | "outside-workspace" => 403,
             "not-found" => 404,
-            "revision-conflict" => 409,
+            "revision-conflict" | "name-conflict" | "stale-node" => 409,
             "file-too-large" => 413,
-            "invalid-asset-path" | "not-file" | "not-folder" | "not-markdown" => 422,
+            "invalid-asset-path" | "not-file" | "not-folder" | "not-markdown"
+            | "invalid-move-target" | "invalid-node-name" | "file-extension-changed" => 422,
             _ => 503,
         };
-        Self::new(status, &error.code, error.message())
+        let detail = match error.code.as_str() {
+            "name-conflict" => "Ya existe un elemento con ese nombre en la carpeta de destino.",
+            "stale-node" => "El elemento cambió en Proton. Comprueba el árbol actualizado.",
+            "invalid-move-target" => "Una carpeta no puede moverse dentro de sí misma ni de una subcarpeta.",
+            "invalid-node-name" => "Escribe un nombre válido para el elemento.",
+            "file-extension-changed" => "Conserva la extensión del archivo al renombrarlo.",
+            _ => error.message(),
+        };
+        Self::new(status, &error.code, detail)
     }
 }
 
@@ -193,9 +254,12 @@ impl Journal {
             document_id: id,
             last_generation: 0,
             markdown: String::new(),
+            content_kind: None,
             draft: None,
             attempt: None,
             receipt: None,
+            owner: None,
+            copies: Vec::new(),
         }
     }
 
@@ -212,7 +276,8 @@ impl Journal {
         };
         json!({
             "baseRevisionId":draft.base_revision_id, "generation":draft.generation,
-            "markdown":self.markdown, "state":state,
+            "markdown":if self.is_handwritten() { "" } else { self.markdown.as_str() }, "state":state,
+            "handwritten":if self.is_handwritten() { serde_json::from_str::<Value>(&self.markdown).ok() } else { None },
         })
     }
 
@@ -266,6 +331,17 @@ struct Workspace<'a> {
 }
 
 impl LocalApi {
+    pub fn cleanup_proton_note_ai(&self) -> std::result::Result<(), String> {
+        self.with_proton_workspace(|workspace| workspace.sweep_note_ai()).map_err(|error| error.detail)
+    }
+
+    pub(super) fn proton_note_ai(&self, kind: &str, body: Value, files: &[LocalApiFile]) -> LocalApiResponse {
+        match self.with_proton_workspace(|workspace| workspace.generate_note_ai(self, kind, &body, files)) {
+            Ok(body) => LocalApiResponse { status: 200, body },
+            Err(error) => error.response(Some("not-started")),
+        }
+    }
+
     fn with_proton_workspace<T>(&self, work: impl FnOnce(Workspace<'_>) -> T) -> T {
         let invoke = |account: &str, operation: &str, payload: Value| {
             self.pd_service().invoke(account, operation, payload)
@@ -282,36 +358,96 @@ impl LocalApi {
             .map_err(|error| error.detail)
     }
 
-    pub(super) fn proton_ai_image(&self, body: &Value) -> std::result::Result<Value, String> {
+    pub(super) fn proton_research_document_id(&self, body: &Value) -> std::result::Result<String, String> {
+        self.with_proton_workspace(|workspace| -> Result<_> {
+            let scope: DocumentScope = parse_input(body)?;
+            Ok(workspace.document(&scope)?.id)
+        })
+        .map_err(|error| error.detail)
+    }
+
+    pub(super) fn read_proton_ai_sources(&self, body: &Value, image_limit: Option<usize>) -> std::result::Result<Vec<AiSource>, String> {
+        self.with_proton_workspace(|workspace| workspace.assistant_sources(body, image_limit))
+            .map_err(|error| error.detail)
+    }
+
+    pub(super) fn proton_recovery_export(&self, body: &Value) -> std::result::Result<(String, String), String> {
+        self.with_proton_workspace(|workspace| workspace.recovery_export(body))
+            .map_err(|error| error.detail)
+    }
+
+    pub(super) fn proton_export_assets(
+        &self,
+        body: &Value,
+        markdown: &str,
+        include_images: bool,
+    ) -> std::result::Result<Vec<neubiki_docs::ExportImageAsset>, String> {
+        self.with_proton_workspace(|workspace| -> std::result::Result<_, String> {
+            let scope: DocumentScope = parse_input(body).map_err(|error| error.detail)?;
+            let document = workspace.document(&scope).map_err(|error| error.detail)?;
+            if !include_images {
+                return Ok(Vec::new());
+            }
+            let assets = workspace.export_images(&document, markdown)?;
+            workspace.check_selection(&scope.account_id, &scope.root_id).map_err(|error| error.detail)?;
+            Ok(assets)
+        })
+    }
+
+    pub(super) fn proton_ai_image(&self, body: &Value) -> std::result::Result<Value, super::proton_ai_error::ProtonAiFailure> {
+        use super::proton_ai_error::ProtonAiFailure as Failure;
         let prompt = body["prompt"].as_str().map(str::trim)
             .filter(|text| !text.is_empty() && text.len() <= 16_000)
-            .ok_or("Escribe una descripción de hasta 16.000 bytes para generar una imagen.")?;
-        let ai = self.read_config_checked()?["ai"].clone();
+            .ok_or_else(Failure::invalid_input)?;
+        let ai = self.read_config_checked().map_err(|_| Failure::settings())?["ai"].clone();
         if ai["permissions"]["generateImages"] != true || ai["imageGeneration"]["enabled"] != true {
-            return Err("La generación de imágenes está desactivada en los ajustes de IA.".into());
+            return Err(Failure::before(403, "proton-ai-image-disabled", "Activa la generación de imágenes en Ajustes de IA."));
         }
-        let key = self.openai_key().ok_or("Configura la clave de IA en el panel IA para generar imágenes.")?;
-        self.validate_proton_tool_target(body)?;
-        let project = super::proton_ai_text::proton_ai_project_id(body)?;
-        self.spend_preflight(Some(&project))?;
+        let key = self.openai_key().ok_or_else(Failure::key_required)?;
+        self.validate_proton_tool_target(body).map_err(|_| Failure::target_changed())?;
+        let project = super::proton_ai_text::proton_ai_project_id(body).map_err(|_| Failure::target_changed())?;
+        self.spend_preflight(Some(&project)).map_err(|_| Failure::budget())?;
         let result = neubiki_ai::generate_image(Some(&key), &ai["imageGeneration"], prompt);
         if result["status"] != "completed" {
-            return Err("El proveedor no confirmó la generación de la imagen. Comprueba su estado antes de repetir.".into());
+            return Err(Failure::provider_unconfirmed());
         }
         let operation = neubiki_core::compact_id("proton-image");
         let usage_recorded = self.record_research_image_usage(&project, &operation, &result).is_ok();
-        let content = result["dataBase64"].as_str().ok_or("El proveedor no devolvió una imagen.")?;
-        let mime = checked_image_type(content)?;
+        let content = result["dataBase64"].as_str().ok_or_else(Failure::provider_unconfirmed)?;
+        let mime = checked_image_type(content).map_err(|_| Failure::provider_unconfirmed())?;
         Ok(json!({"contentBase64":content,"contentType":mime,"usageRecorded":usage_recorded}))
     }
 
-    pub(super) fn proton_workspace(&self, action: &str, body: Value) -> LocalApiResponse {
-        match self.with_proton_workspace(|workspace| workspace.handle(action, body)) {
+    pub(super) fn proton_workspace(&self, action: &str, body: Value, files: &[LocalApiFile]) -> LocalApiResponse {
+        match self.with_proton_workspace(|workspace| {
+            if action == "import-file" { workspace.import_file(&body, files) }
+            else if matches!(action, "meeting-publish-review" | "meeting-publish" | "meeting-publish-check") {
+                workspace.meeting_publication(self, action, &body)
+            }
+            else if matches!(action, "note-ai-check" | "note-ai-apply" | "note-ai-catalog") {
+                workspace.note_ai_action(self, action, &body)
+            }
+            else if matches!(action, "profiles-read" | "profiles-publish" | "profiles-check") {
+                workspace.shared_profiles(self, action, &body)
+            }
+            else if action == "replacement-apply" {
+                let allow_ai = self.read_config_checked().ok().is_some_and(|config| config["ai"]["permissions"]["editDocuments"] == true);
+                workspace.apply_replacements(&body, allow_ai)
+            }
+            else if action == "batch-edit-prepare" {
+                workspace.batch_edit(self, "prepare", &body)
+            }
+            else { workspace.handle(action, body) }
+        }) {
             Ok(body) => LocalApiResponse { status: 200, body },
-            Err(error) => LocalApiResponse {
-                status: error.status,
-                body: json!({"code":error.code,"detail":error.detail,"operationOutcome":"not-started"}),
-            },
+            Err(error) => {
+                let outcome = if matches!(action, "tree-edit" | "import-file") && (error.status >= 500 || error.status == 401) {
+                    "unknown"
+                } else {
+                    "not-started"
+                };
+                error.response(Some(outcome))
+            }
         }
     }
 }
@@ -333,9 +469,26 @@ impl Workspace<'_> {
                 Ok(json!({"root":root}))
             }
             "list" => self.list(&body),
+            "search" => self.search(&body),
+            "content-index-status" | "content-index-configure" | "content-index-clear" => self.content_index_action(action, &body),
+            "favorites" => self.favorites(&body),
+            "favorite-items" => self.favorite_items(&body),
+            "favorites-update" => self.favorites_update(&body),
+            "favorites-check" => self.favorites_check(&body),
+            "resource-catalog" => self.resource_catalog(&body),
+            "note-page-render" => self.note_page_render(&body),
+            "reference-impact" => self.reference_impact(&body),
+            "office-preview" => self.office_preview(&body),
             "select" => self.select(&body),
             "events" => self.events(&body),
-            "read" | "asset" | "upload-image" | "draft" | "save" | "reconcile" | "discard" => {
+            "replacement-review" => self.review_replacements(&body),
+            "replacement-status" => self.replacement_status(&body),
+            "recovery-list" => self.recovery_list(&body),
+            "recovery-read" => self.recovery_read(&body),
+            "recovery-remove-copy" => self.recovery_remove_copy(&body),
+            "tree-edit" => self.tree_edit(&body),
+            "trash-list" | "trash-restore" | "trash-check" => self.trash_action(action, &body),
+            "read" | "asset" | "upload-image" | "draft" | "save" | "reconcile" | "discard" | "conflict-review" | "conflict-resolve" | "references" | "incoming-references" => {
                 let scope: DocumentScope = parse_input(&body)?;
                 let document = self.document(&scope)?;
                 match action {
@@ -346,6 +499,10 @@ impl Workspace<'_> {
                     "save" => self.save(&document, &body),
                     "reconcile" => self.reconcile(&document),
                     "discard" => self.discard(&document, &body),
+                    "conflict-review" => self.conflict_review(&document),
+                    "conflict-resolve" => self.conflict_resolve(&document, &body),
+                    "references" => self.references(&document, &body),
+                    "incoming-references" => self.incoming_references(&document, &body),
                     _ => unreachable!(),
                 }
             }
@@ -365,6 +522,96 @@ impl Workspace<'_> {
     ) -> Result<T> {
         let result = (self.invoke)(account, operation, body).map_err(Error::from)?;
         serde_json::from_value(result).map_err(|_| Error::invalid_response())
+    }
+
+    fn tree_edit(&self, body: &Value) -> Result<Value> {
+        self.require_write()?;
+        let account = token(body, "accountId")?;
+        let root = token(body, "rootId")?;
+        self.check_selection(account, root)?;
+        let parent = token(body, "parentId")?;
+        let action = token(body, "action")?;
+        let mut request = json!({"rootId":root,"parentId":parent,"action":action});
+        let source = match action {
+            "create-folder" | "create-document" | "create-note" => None,
+            "rename" | "move" | "duplicate" | "trash" => {
+                let node = token(body, "nodeId")?;
+                if node == root { return Err(Error::input()); }
+                request["nodeId"] = json!(node);
+                request["expectedName"] = json!(tree_name(body, "expectedName")?);
+                Some(node)
+            }
+            _ => return Err(Error::input()),
+        };
+        if matches!(action, "create-folder" | "create-document" | "create-note" | "rename" | "duplicate") {
+            request["name"] = json!(tree_name(body, "name")?);
+        }
+        if action == "create-note" {
+            let name = tree_name(body, "name")?;
+            if !name.to_ascii_lowercase().ends_with(".nbnote") { return Err(Error::input()); }
+            request["contentBase64"] = json!(BASE64.encode(handwritten::new_note(name).to_string()));
+        }
+        if action == "move" {
+            let target = token(body, "targetParentId")?;
+            if Some(target) == source { return Err(Error::input()); }
+            request["targetParentId"] = json!(target);
+        }
+
+        if action == "trash" {
+            let ack: Value = self.provider(account, "drive.workspaceTreeEdit", request)?;
+            if ack["trashedId"].as_str() != source { return Err(Error::invalid_response()); }
+            return Ok(ack);
+        }
+        let expected_name = if action == "move" { request["expectedName"].clone() } else { request["name"].clone() };
+        let node: Node = self.provider(account, "drive.workspaceTreeEdit", request)?;
+        validate_node(&node)?;
+        let same_node = source == Some(node.node_id.as_str());
+        if expected_name.as_str() != Some(node.name.as_str())
+            || node.node_id == root
+            || same_node != matches!(action, "rename" | "move")
+            || (action == "create-folder" && node.kind != NodeKind::Folder)
+            || (matches!(action, "create-document" | "create-note" | "duplicate") && node.kind != NodeKind::File)
+        {
+            return Err(Error::invalid_response());
+        }
+        Ok(json!({"node":node}))
+    }
+
+    fn import_file(&self, body: &Value, files: &[LocalApiFile]) -> Result<Value> {
+        self.require_write()?;
+        let account = token(body, "accountId")?;
+        let root = token(body, "rootId")?;
+        self.check_selection(account, root)?;
+        let parent = token(body, "parentId")?;
+        let [file] = files else { return Err(Error::input()); };
+        if file.field_name != "file" { return Err(Error::input()); }
+        let name = file.name.as_str();
+        if name.is_empty() || name != name.trim() || name.encode_utf16().count() > 255
+            || name.ends_with('.') || name.chars().any(|ch| ch.is_control() || "\\/:*?\"<>|".contains(ch)) {
+            return Err(Error::input());
+        }
+        let too_large = || Error::new(413, "file-too-large", "El archivo supera el límite de importación de 8 MiB.");
+        if file.data_base64.len() > MAX_IMPORTED_FILE_BYTES.div_ceil(3) * 4 {
+            return Err(too_large());
+        }
+        let bytes = BASE64.decode(&file.data_base64).map_err(|_| Error::input())?;
+        if bytes.len() > MAX_IMPORTED_FILE_BYTES { return Err(too_large()); }
+        let media_type = file.mime_type.as_deref().filter(|media| {
+            media.len() <= 128 && media.split_once('/').is_some_and(|(kind, subtype)| {
+                [kind, subtype].into_iter().all(|part| !part.is_empty() && part.bytes().all(|ch| {
+                    ch.is_ascii_alphanumeric() || matches!(ch, b'+' | b'-' | b'.' | b'_')
+                }))
+            })
+        }).unwrap_or("application/octet-stream");
+        let node: Node = self.provider(account, "drive.workspaceTreeEdit", json!({
+            "rootId":root,"parentId":parent,"action":"import-file","name":name,
+            "mediaType":media_type,"contentBase64":file.data_base64,
+        }))?;
+        validate_node(&node)?;
+        if node.kind != NodeKind::File || node.name != name || node.node_id == root || node.node_id == parent || node.revision_id.is_none() {
+            return Err(Error::invalid_response());
+        }
+        Ok(json!({"node":node}))
     }
 
     fn selection(&self) -> Result<Option<Selection>> {
@@ -446,7 +693,9 @@ impl Workspace<'_> {
         for node in &listing.items {
             validate_node(node)?;
         }
-        Ok(json!({"items":listing.items}))
+        let items: Vec<_> = listing.items.into_iter()
+            .filter(|node| !super::path_policy::reserved(std::ffi::OsStr::new(&node.name))).collect();
+        Ok(json!({"items":items}))
     }
 
     fn events(&self, body: &Value) -> Result<Value> {
@@ -495,13 +744,18 @@ impl Workspace<'_> {
     }
 
     fn document<'a>(&self, scope: &'a DocumentScope) -> Result<Document<'a>> {
+        let document = Self::document_key(scope)?;
+        self.check_selection(&scope.account_id, &scope.root_id)?;
+        Ok(document)
+    }
+
+    fn document_key(scope: &DocumentScope) -> Result<Document<'_>> {
         if [&scope.account_id, &scope.root_id, &scope.node_id]
             .iter()
             .any(|id| !valid_token(id))
         {
             return Err(Error::input());
         }
-        self.check_selection(&scope.account_id, &scope.root_id)?;
         let identity = json!([&scope.account_id, &scope.root_id, &scope.node_id]).to_string();
         Ok(Document {
             scope,
@@ -540,6 +794,11 @@ impl Workspace<'_> {
         if remote.node.kind != NodeKind::File
             || remote.node.revision_id.as_deref() != Some(remote.revision_id.as_str())
             || (asset.is_none() && remote.node.node_id != document.scope.node_id)
+            || (asset.is_none() && remote.ancestor_ids.as_ref().is_some_and(|ids| {
+                ids.len() > 128 || ids.first() != Some(&document.scope.root_id)
+                    || ids.iter().any(|id| !valid_token(id) || id == &document.scope.node_id)
+                    || ids.iter().collect::<BTreeSet<_>>().len() != ids.len()
+            }))
         {
             return Err(Error::invalid_response());
         }
@@ -548,6 +807,18 @@ impl Workspace<'_> {
 
     fn read(&self, document: &Document<'_>) -> Result<Value> {
         let remote = self.remote_read(document, None)?;
+        if is_handwritten(&remote.node.name) {
+            let note = read_preview_note(&remote, &document.id)?;
+            self.check_selection(&document.scope.account_id, &document.scope.root_id)?;
+            let _lock = gate()?;
+            let mut journal = self.load_journal(document)?;
+            if journal.draft.is_some() && !journal.is_handwritten() { return Err(private_location()); }
+            if journal.attempt.is_none() {
+                if let Some(draft) = &mut journal.draft { draft.conflict |= draft.base_revision_id != remote.revision_id; }
+            }
+            return Ok(json!({"node":remote.node,"revisionId":remote.revision_id,"ancestorIds":remote.ancestor_ids,
+                "markdown": Value::Null, "contentBase64": Value::Null, "handwritten":note, "draft":journal.draft_value()}));
+        }
         let markdown = is_markdown(&remote.node.name);
         let (text, bytes) = if markdown {
             // Preserve the exact UTF-8 text so the user can reconcile byte-for-byte.
@@ -566,9 +837,15 @@ impl Workspace<'_> {
             (None, Some(remote.content_base64))
         };
         let _lock = gate()?;
-        let journal = self.load_journal(document)?;
+        self.check_selection(&document.scope.account_id, &document.scope.root_id)?;
+        let mut journal = self.load_journal(document)?;
+        if journal.attempt.is_none() {
+            if let Some(draft) = &mut journal.draft {
+                draft.conflict |= draft.base_revision_id != remote.revision_id;
+            }
+        }
         Ok(json!({
-            "node":remote.node,"revisionId":remote.revision_id,
+            "node":remote.node,"revisionId":remote.revision_id,"ancestorIds":remote.ancestor_ids,
             "markdown":text,"contentBase64":bytes,"draft":journal.draft_value(),
         }))
     }
@@ -592,6 +869,50 @@ impl Workspace<'_> {
         Ok(
             json!({"node":remote.node,"revisionId":remote.revision_id,"contentType":mime,"contentBase64":remote.content_base64}),
         )
+    }
+
+    fn export_images(
+        &self,
+        document: &Document<'_>,
+        markdown: &str,
+    ) -> std::result::Result<Vec<neubiki_docs::ExportImageAsset>, String> {
+        let mut seen = BTreeSet::new();
+        let mut assets = Vec::new();
+        let mut budget: usize = 64 * 1024 * 1024;
+        for image in neubiki_docs::markdown_images(markdown) {
+            let source = image.source.trim();
+            if source.is_empty() || !seen.insert(source.to_string()) {
+                continue;
+            }
+            if seen.len() > 128 {
+                return Err("La exportación admite hasta 128 imágenes".into());
+            }
+            let (content_type, bytes) = if source.starts_with("data:") {
+                if source.len() > 16 * 1024 * 1024 {
+                    return Err("Una imagen incrustada supera el límite de exportación".into());
+                }
+                super::image_data_url_bytes(source).ok_or("La imagen incrustada no tiene un formato raster compatible")?
+            } else {
+                let raw = source.split(['?', '#']).next().unwrap_or(source);
+                let relative = neubiki_core::percent_decode(raw);
+                if relative.is_empty() || relative.len() > 4096 || relative.starts_with('/')
+                    || relative.contains(['\\', ':', '\0'])
+                {
+                    return Err("Para exportar una imagen externa, guárdala primero como recurso de Proton Drive".into());
+                }
+                let remote = self.remote_read(document, Some(&relative)).map_err(|error| error.detail)?;
+                let (bytes, mime) = bounded_image(&remote.content_base64).map_err(|error| error.detail)?;
+                (mime.to_string(), bytes)
+            };
+            budget = budget.checked_sub(bytes.len()).ok_or("Las imágenes de exportación superan 64 MiB")?;
+            assets.push(neubiki_docs::ExportImageAsset {
+                source: source.to_string(),
+                alt: Some(image.alt),
+                content_type,
+                bytes,
+            });
+        }
+        Ok(assets)
     }
 
     fn upload_image(&self, document: &Document<'_>, body: &Value) -> Result<Value> {
@@ -645,8 +966,13 @@ impl Workspace<'_> {
         if !valid_revision(&document.scope.node_id, base_revision) {
             return Err(Error::input());
         }
-        let markdown = body["markdown"].as_str().ok_or_else(Error::input)?;
-        if markdown.len() > MAX_MARKDOWN_BYTES {
+        let is_note = body.get("handwritten").is_some();
+        let serialized;
+        let markdown = if is_note {
+            serialized = handwritten::serialize_note(&body["handwritten"])?;
+            serialized.as_str()
+        } else { body["markdown"].as_str().ok_or_else(Error::input)? };
+        if markdown.len() > if is_note { MAX_NOTE_BYTES } else { MAX_MARKDOWN_BYTES } {
             return Err(Error::new(
                 413,
                 "proton-edit-too-large",
@@ -655,7 +981,9 @@ impl Workspace<'_> {
         }
         let expected_generation = generation(body, "expectedGeneration")?;
         let _lock = gate()?;
+        let selection = self.recovery_selection(document)?;
         let mut record = self.load_journal(document)?;
+        if record.draft.is_some() && record.is_handwritten() != is_note { return Err(Error::generation()); }
         if record.draft.as_ref().map(|draft| draft.generation) != expected_generation
             || record
                 .draft
@@ -673,11 +1001,17 @@ impl Workspace<'_> {
             .filter(|next| *next < 9_007_199_254_740_992)
             .ok_or_else(Error::generation)?;
         record.markdown = markdown.into();
+        record.content_kind = if is_note { Some("handwritten".into()) } else { None };
         record.draft = Some(DraftRecord {
             generation: record.last_generation,
             base_revision_id: base_revision.into(),
             conflict: record.draft.is_some_and(|draft| draft.conflict),
         });
+        record.owner = Some(workspace_recovery::RecoveryOwner::capture(
+            document.scope, &selection,
+            if is_note { Some(body["documentName"].as_str().filter(|name| is_handwritten(name)).unwrap_or("Nota manuscrita.nbnote")) }
+            else { body["documentName"].as_str() }, record.owner.as_ref(),
+        ));
         self.write_journal(&record)?;
         Ok(record.draft_value())
     }
@@ -686,7 +1020,7 @@ impl Workspace<'_> {
         self.require_write()?;
         let operation_id = token(body, "operationId")?;
         let generation = generation(body, "generation")?.ok_or_else(Error::input)?;
-        let (attempt, markdown, in_flight) = {
+        let (attempt, markdown, is_note, in_flight) = {
             let mut lock = gate()?;
             let mut journal = self.load_journal(document)?;
             if let Some(receipt) = journal.receipt.as_ref().filter(|receipt| {
@@ -723,12 +1057,14 @@ impl Workspace<'_> {
             let key = draft_store::path(&self.drafts_dir(), &document.id);
             self.write_journal(&journal)?;
             lock.insert(key.clone());
-            (attempt, journal.markdown, InFlight(key))
+            let is_note = journal.is_handwritten();
+            (attempt, journal.markdown, is_note, InFlight(key))
         };
 
         let mut payload = document.request();
         payload["baseRevisionId"] = json!(attempt.base_revision_id);
         payload["contentBase64"] = json!(BASE64.encode(markdown));
+        if is_note { payload["contentKind"] = json!("handwritten"); }
         let uploaded: Result<RevisionAck> =
             self.provider(&document.scope.account_id, "drive.writeRevision", payload);
         let result = match uploaded {
@@ -870,6 +1206,7 @@ impl Workspace<'_> {
         let record: Journal = serde_json::from_value(value).map_err(|_| private_location())?;
         if record.schema_version != 1
             || record.document_id != document.id
+            || !record.has_valid_recovery(document)
             || record.draft.as_ref().is_some_and(|draft| {
                 draft.generation != record.last_generation
                     || !valid_revision(&document.scope.node_id, &draft.base_revision_id)
@@ -920,6 +1257,13 @@ fn token<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
         .ok_or_else(Error::input)
 }
 
+fn tree_name<'a>(body: &'a Value, field: &str) -> Result<&'a str> {
+    body[field].as_str()
+        .filter(|name| !name.is_empty() && name.len() <= 1024 && !name.chars().any(char::is_control)
+            && !super::path_policy::reserved(std::ffi::OsStr::new(name)))
+        .ok_or_else(Error::input)
+}
+
 fn generation(value: &Value, field: &str) -> Result<Option<u64>> {
     let field = value.get(field).ok_or_else(Error::input)?;
     if field.is_null() {
@@ -962,10 +1306,32 @@ fn validate_node(node: &Node) -> Result<()> {
     }
 }
 
-fn is_markdown(name: &str) -> bool {
+pub(super) fn is_markdown(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, ext)| {
-        ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+        ["md", "markdown", "mdown"].iter().any(|format| ext.eq_ignore_ascii_case(format))
     })
+}
+
+fn read_preview_note(remote: &RemoteRead, id: &str) -> Result<Value> {
+    if remote.content_base64.len() > 4 * MAX_NOTE_BYTES.div_ceil(3) {
+        return Err(Error::new(422, "proton-knote-size", "La nota supera los 8 MiB admitidos por el visor."));
+    }
+    let bytes = BASE64.decode(&remote.content_base64).map_err(|_| Error::invalid_response())?;
+    if bytes.len() > MAX_NOTE_BYTES {
+        return Err(Error::new(422, "proton-knote-size", "La nota supera los 8 MiB admitidos por el visor."));
+    }
+    let content: Value = serde_json::from_slice(&bytes).map_err(|_| {
+        Error::new(422, "proton-knote-format", "No se pudo leer esta nota manuscrita.")
+    })?;
+    super::document_validation::handwritten(&content).map_err(|_| {
+        Error::new(422, "proton-knote-format", "Esta versión o estructura de nota manuscrita no es compatible.")
+    })?;
+    let stored_id = content["id"].as_str().unwrap_or(id).to_owned();
+    Ok(super::normalize_handwritten_note(content, &stored_id, &remote.node.name))
+}
+
+pub(super) fn is_handwritten(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| ["nbnote", "knote"].iter().any(|format| ext.eq_ignore_ascii_case(format)))
 }
 
 fn image_type(data: &[u8]) -> Option<&'static str> {
@@ -1070,6 +1436,174 @@ mod tests {
             "node":file(node,name,revision),"revisionId":revision,
             "contentBase64":BASE64.encode(bytes)
         })
+    }
+
+    #[test]
+    fn reads_a_supported_note_for_preview_and_rejects_unknown_versions() {
+        let mut note = super::super::default_handwritten_note("original-note", "Example");
+        let read = |note: &Value| serde_json::from_value::<RemoteRead>(remote(
+            NODE, "Example.knote", BASE, &serde_json::to_vec(note).unwrap(),
+        )).unwrap();
+        let preview = read_preview_note(&read(&note), "instance-note").unwrap();
+        assert_eq!(preview["pages"], note["pages"]);
+        assert_eq!(preview["id"], "original-note");
+        note["schemaVersion"] = json!(99);
+        assert_eq!(read_preview_note(&read(&note), "instance-note").unwrap_err().code, "proton-knote-format");
+    }
+
+    #[test]
+    fn proton_workspace_recovery_reads_legacy_drafts_after_remote_disappears() {
+        let dir = tempfile::tempdir().unwrap();
+        let available = Cell::new(true);
+        let invoke = |_: &str, operation: &str, _: Value| {
+            assert!(available.get(), "Recovery must make no provider call");
+            assert_eq!(operation, "drive.workspaceFolder");
+            Ok(folder())
+        };
+        let workspace = Workspace { directory: dir.path().join("state"), invoke: &invoke, can_write: true };
+        workspace.handle("select", payload()).unwrap();
+        let scope: DocumentScope = parse_input(&payload()).unwrap();
+        let document = workspace.document(&scope).unwrap();
+        let mut legacy = Journal::new(document.id);
+        legacy.last_generation = 1;
+        legacy.draft = Some(DraftRecord { base_revision_id: BASE.into(), generation: 1, conflict: false });
+        legacy.markdown = "# Texto original".into();
+        workspace.write_journal(&legacy).unwrap();
+        available.set(false);
+
+        let listed = workspace.handle("recovery-list", json!({"cursor":null})).unwrap();
+        assert_eq!(listed["entries"][0]["key"]["nodeId"], NODE);
+        assert_eq!(listed["entries"][0]["rootName"], "Fixture");
+        let target = json!({"accountId":"test","rootId":ROOT,"nodeId":NODE,"generation":1,"kind":"draft"});
+        assert_eq!(workspace.handle("recovery-read", target.clone()).unwrap()["markdown"], "# Texto original");
+        assert_eq!(workspace.recovery_export(&json!({"recovery":target})).unwrap().1, "# Texto original");
+        let mut different_root = target;
+        different_root["rootId"] = json!("volume~different");
+        assert_eq!(workspace.handle("recovery-read", different_root).unwrap_err().code, "proton-recovery-changed");
+    }
+
+    #[test]
+    fn proton_workspace_resolution_preserves_both_versions_and_revalidates_bases() {
+        let dir = tempfile::tempdir().unwrap();
+        let revision = Cell::new(NEXT);
+        let writes = Cell::new(0);
+        let invoke = |_: &str, operation: &str, request: Value| match operation {
+            "drive.workspaceFolder" => Ok(folder()),
+            "drive.workspaceRead" => Ok(remote(NODE, "Revision.mdown", revision.get(), b"# Remote")),
+            "drive.writeRevision" => {
+                writes.set(writes.get() + 1);
+                assert_eq!(request["baseRevisionId"], NEXT);
+                assert_eq!(request["contentBase64"], BASE64.encode("# Combined"));
+                Ok(json!({"nodeId":NODE,"revisionId":"volume~document~saved"}))
+            }
+            _ => panic!("Unexpected operation {operation}"),
+        };
+        let workspace = Workspace { directory: dir.path().join("state"), invoke: &invoke, can_write: true };
+        workspace.handle("select", payload()).unwrap();
+        workspace.handle("draft", draft("# Mine", None)).unwrap();
+        let reloaded = workspace.handle("read", payload()).unwrap();
+        assert_eq!(reloaded["markdown"], "# Remote");
+        assert_eq!(reloaded["draft"]["state"], "conflict");
+        assert_eq!(workspace.handle("conflict-review", payload()).unwrap()["remoteRevisionId"], NEXT);
+
+        let request = json!({"accountId":"test","rootId":ROOT,"nodeId":NODE,"draftGeneration":1,
+            "remoteRevisionId":NEXT,"markdown":"# Combined"});
+        revision.set("volume~document~another");
+        assert_eq!(workspace.handle("conflict-resolve", request.clone()).unwrap_err().code, "proton-conflict-review-stale");
+        revision.set(NEXT);
+        let response = workspace.handle("conflict-resolve", request.clone()).unwrap();
+        assert_eq!(response["draft"]["generation"], 2);
+        assert_eq!(response["draft"]["baseRevisionId"], NEXT);
+        assert_eq!(response["draft"]["markdown"], "# Combined");
+        assert_eq!(writes.get(), 0);
+        assert!(workspace.handle("conflict-resolve", request).is_err());
+        assert_eq!(workspace.handle("save", save(2)).unwrap()["state"], "saved");
+
+        let archived = workspace.handle("recovery-list", json!({})).unwrap();
+        assert_eq!(archived["entries"].as_array().unwrap().len(), 2);
+        for (kind, expected) in [("local-original", "# Mine"), ("remote-original", "# Remote")] {
+            let body = json!({"accountId":"test","rootId":ROOT,"nodeId":NODE,"generation":1,"kind":kind});
+            assert_eq!(workspace.handle("recovery-read", body).unwrap()["markdown"], expected);
+        }
+    }
+
+    #[test]
+    fn tree_edits_are_scoped_and_require_a_matching_provider_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let calls = Cell::new(0);
+        let valid_ack = Cell::new(true);
+        let invoke = |account: &str, operation: &str, body: Value| {
+            assert_eq!(account, "test");
+            if operation == "drive.workspaceFolder" { return Ok(folder()); }
+            assert_eq!(operation, "drive.workspaceTreeEdit");
+            assert_eq!(body["rootId"], ROOT);
+            assert_eq!(body["parentId"], ROOT);
+            assert_eq!(body["nodeId"], NODE);
+            assert_eq!(body["expectedName"], "Antes.md");
+            calls.set(calls.get() + 1);
+            Ok(match body["action"].as_str() {
+                Some("rename") => file(NODE, "Después.md", BASE),
+                Some("trash") => json!({"trashedId":if valid_ack.get() { NODE } else { ROOT }}),
+                _ => panic!("unexpected mutation"),
+            })
+        };
+        let workspace = Workspace { directory: temp.path().join("workspace"), invoke: &invoke, can_write: true };
+        workspace.handle("select", payload()).unwrap();
+        let mut edit = payload();
+        edit["parentId"] = json!(ROOT);
+        edit["expectedName"] = json!("Antes.md");
+        edit["action"] = json!("rename");
+        edit["name"] = json!("Después.md");
+        let read_only = Workspace { directory: workspace.directory.clone(), invoke: &invoke, can_write: false };
+        assert_eq!(read_only.handle("tree-edit", edit.clone()).unwrap_err().status, 403);
+        edit["rootId"] = json!("otra-raiz");
+        assert_eq!(workspace.handle("tree-edit", edit.clone()).unwrap_err().status, 409);
+        edit["rootId"] = json!(ROOT);
+        edit["nodeId"] = json!(ROOT);
+        assert_eq!(workspace.handle("tree-edit", edit.clone()).unwrap_err().status, 400);
+        assert_eq!(calls.get(), 0);
+        edit["nodeId"] = json!(NODE);
+        assert_eq!(workspace.handle("tree-edit", edit.clone()).unwrap()["node"]["name"], "Después.md");
+        edit["action"] = json!("trash");
+        assert_eq!(workspace.handle("tree-edit", edit.clone()).unwrap()["trashedId"], NODE);
+        valid_ack.set(false);
+        assert_eq!(workspace.handle("tree-edit", edit).unwrap_err().status, 502);
+    }
+
+    #[test]
+    fn file_import_requires_the_selected_scope_and_a_confirmed_new_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let calls = Cell::new(0);
+        let confirmed = Cell::new(true);
+        let invoke = |account: &str, operation: &str, body: Value| {
+            assert_eq!(account, "test");
+            if operation == "drive.workspaceFolder" { return Ok(folder()); }
+            assert_eq!(operation, "drive.workspaceTreeEdit");
+            assert_eq!(body["action"], "import-file");
+            assert_eq!(body["rootId"], ROOT);
+            assert_eq!(body["parentId"], ROOT);
+            assert_eq!(body["mediaType"], "application/octet-stream");
+            assert_eq!(body["contentBase64"], BASE64.encode([0u8, 17, 63, 255]));
+            calls.set(calls.get() + 1);
+            Ok(file(if confirmed.get() { NODE } else { ROOT }, "Foto.bin", BASE))
+        };
+        let workspace = Workspace { directory: temp.path().join("workspace"), invoke: &invoke, can_write: true };
+        workspace.handle("select", payload()).unwrap();
+        let mut request = payload();
+        request["parentId"] = json!(ROOT);
+        let mut input = [LocalApiFile {
+            field_name: "file".into(), name: "../Foto.bin".into(), mime_type: Some("invalid header".into()),
+            data_base64: BASE64.encode([0u8, 17, 63, 255]),
+        }];
+        assert_eq!(workspace.import_file(&request, &input).unwrap_err().status, 400);
+        input[0].name = "Foto.bin".into();
+        request["rootId"] = json!("other");
+        assert_eq!(workspace.import_file(&request, &input).unwrap_err().status, 409);
+        assert_eq!(calls.get(), 0);
+        request["rootId"] = json!(ROOT);
+        assert_eq!(workspace.import_file(&request, &input).unwrap()["node"]["nodeId"], NODE);
+        confirmed.set(false);
+        assert_eq!(workspace.import_file(&request, &input).unwrap_err().status, 502);
     }
 
     #[test]

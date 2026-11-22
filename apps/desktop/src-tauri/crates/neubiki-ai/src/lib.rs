@@ -1,5 +1,6 @@
 pub mod handwritten_ocr;
 pub mod proton_text;
+pub mod proton_research;
 use base64::Engine;
 use reqwest::blocking::{multipart, Client};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};

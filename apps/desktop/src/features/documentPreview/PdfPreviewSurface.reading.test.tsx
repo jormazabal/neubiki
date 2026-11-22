@@ -2,10 +2,23 @@ import {act,cleanup,fireEvent,render,screen,waitFor} from "@testing-library/reac
 import {afterEach,describe,it,expect,vi} from "vitest";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import {PdfPreviewSurface} from "./PdfPreviewSurface";
+import {UiLocaleProvider} from "../../lib/i18n/UiLocale";
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs",()=>({GlobalWorkerOptions:{},getDocument:vi.fn()}));
 vi.mock("pdfjs-dist/legacy/build/pdf.worker.mjs?url",()=>({default:"worker"}));
 afterEach(()=>{cleanup();vi.unstubAllGlobals();vi.restoreAllMocks();Reflect.deleteProperty(HTMLElement.prototype,"scrollIntoView");});
 describe("PDF reading position",()=>{
+  it("localizes loading and render failure without reopening the PDF on a locale switch", async()=>{
+    vi.mocked(pdfjsLib.getDocument).mockReturnValue({promise:Promise.reject(new Error("synthetic parser failure")),destroy:vi.fn().mockResolvedValue(undefined)} as unknown as ReturnType<typeof pdfjsLib.getDocument>);
+    const props={url:"broken.pdf",query:"",zoomPercent:100,fitMode:"page" as const,pageNumber:1,navigationSequence:0,onPageChange:vi.fn(),onPageCountChange:vi.fn(),onSearchCountChange:vi.fn(),singlePage:true};
+    const view=render(<UiLocaleProvider language="en"><PdfPreviewSurface {...props}/></UiLocaleProvider>);
+    expect(screen.getByText("Preparing pages")).toBeVisible();
+    expect(await screen.findByText("Could not render the PDF")).toBeVisible();
+    expect(screen.getByText("You can reload the file from Proton.")).toBeVisible();
+    const calls=vi.mocked(pdfjsLib.getDocument).mock.calls.length;
+    view.rerender(<UiLocaleProvider language="es"><PdfPreviewSurface {...props}/></UiLocaleProvider>);
+    expect(screen.getByText("No se pudo renderizar el PDF")).toBeVisible();
+    expect(vi.mocked(pdfjsLib.getDocument).mock.calls.length).toBe(calls);
+  });
   it("restores proportional page and horizontal position across resize, and reports scrolling",async()=>{
     const frames=new Map<number,FrameRequestCallback>();let sequence=0;let width=800;
     vi.stubGlobal("requestAnimationFrame",(callback:FrameRequestCallback)=>{frames.set(++sequence,callback);return sequence;});vi.stubGlobal("cancelAnimationFrame",(id:number)=>frames.delete(id));

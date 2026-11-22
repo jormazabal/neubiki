@@ -1,0 +1,53 @@
+# Idioma de la interfaz
+
+Neubiki reutiliza la preferencia heredada `config.appearance.language`, con los valores `es` y `en`. `WorkspaceAppearance` la normaliza sin perder el valor existente; una configuración sin idioma o con un valor no admitido usa español. El selector está en Configuración → Apariencia → Interfaz y se guarda mediante el mismo propietario y cola de guardado de apariencia. No se crea un almacén ni un servicio adicional.
+
+`UiLocaleProvider` es un adaptador controlado por `appearance.value.language`. Expone `useUiLocale()` y `useUiCopy()` a sus descendientes, incluidos los portales React. `uiCopy` contiene claves tipadas y las dos traducciones; los formularios heredados reutilizan `settingsCopy[language]`. No se traduce el DOM ni se buscan frases para sustituirlas. El código de apariencia actualiza `document.documentElement.lang` para lectores de pantalla y lo restaura al desmontarse.
+
+La preferencia cambia la interfaz y los rótulos que Neubiki propone para archivos nuevos. Los nombres existentes, etiquetas de cuenta, Markdown, prompts, transcripciones y resultados del proveedor conservan su contenido. El cliente presenta los errores de la aplicación mediante un catálogo ES/EN y conserva el código, el identificador y el resultado de la operación por separado. Si el código es desconocido o el runtime no devuelve la confirmación, la interfaz ofrece un mensaje localizado y la acción segura aplicable sin mostrar el detalle técnico. Una operación de resultado incierto se comprueba con su recibo.
+
+## Cobertura actual y trabajo pendiente
+
+| Superficie | Cobertura |
+| --- | --- |
+| Menú de cuenta | Navegación, sesión, grabaciones, recuperación y accesibilidad ES/EN; conserva la etiqueta de la cuenta. |
+| Árbol principal y selector de carpeta | Encabezado, menús contextuales, acciones, etiquetas accesibles, carga, error, vacío y controles de selección ES/EN; conserva nombres, rutas e identidades de archivos y carpetas. |
+| Navegación de Configuración | Apartados, búsqueda, cantidades de resultados, volver y confirmación de cambios pendientes ES/EN. La búsqueda admite los temas existentes en ambos idiomas. |
+| Apariencia | Idioma, perfiles, colores, escala, tipografía, guardado, fallo y reintento ES/EN. |
+| Formularios principales de IA, capacidades y plantilla | Reutilizan el diccionario heredado ES/EN y el contexto correcto de profundidad de formulario. |
+| Diálogos manuscritos especializados | OCR, dibujo, dictado de página, inserción PNG, conflicto y combinación manual, vista previa y acciones de exportación ES/EN. La captura local compartida traduce controles y estados. Conserva nombres, títulos, texto de página, propuestas y contenido Markdown generado; los recibos y errores del runtime mantienen su idioma original. |
+| Recuperación y Papelera | Inventario y consulta de copias locales, exportación, retirada confirmada de las dos copias originales, catálogo de papelera, revisión del destino y comprobación de restauración pendiente ES/EN. La fecha de papelera sigue el idioma elegido. Nombres, rutas, contenidos e identidades se conservan; recuperar copias locales sigue disponible sin carpeta activa y sin conexión. |
+| Shell principal | Estado de cuenta y conexión, pestañas, avisos de protección, árbol, confirmación de guardado y restauración de sesión usan el mismo idioma que Configuración. |
+| Marco del documento Proton | Panel de herramientas, carga, estados de guardado y pie de borrador ES/EN. La barra Milkdown, paleta contextual y variante estrecha localizan opciones de bloque, formato, resaltado, tabla, historial local y zoom. |
+| Plantillas reutilizables y copias portables | Captura y aplicación de plantillas, revisión/entrega de paquete y restauración como copia ES/EN mediante protonPortabilityCopy. Conserva nombres, rutas, contenido y detalles de servicios. |
+| Habilidades de IA | Catálogo, filtros, navegación, detalle, vista previa y controles de diagnóstico ES/EN. Conserva las instrucciones, el manifiesto, los ejemplos y el diagnóstico con su contenido original. |
+| Dispositivo y actualizaciones | Panel de almacenamiento, categorías, tamaños/fechas, medición parcial/no disponible, diagnóstico privado y UI de actualización ES/EN. Se reutiliza el contrato `english` del diagnóstico seguro. Los mensajes propios de fallo del controlador usan el idioma elegido; las notas de versión, errores del runtime e instalador y contenido del informe técnico se conservan intactos. |
+| Control de índice local | Casilla voluntaria, cantidades, conexión, confirmaciones de borrar/desactivar y comprobación de un resultado incierto ES/EN. El ámbito se toma únicamente de cuenta y raíz; el contenido guardado se distingue de la vigencia remota. |
+| Investigación combinada | Consentimiento de fuentes de texto, revisión del coste y paneles independientes de informe público y síntesis ES/EN. Se conservan pregunta, contenido de resultados, nombres y citas. Una síntesis no confirmada mantiene el informe y no ofrece repetición automática. |
+| Búsqueda por significado | Proyecto o fuentes guardadas elegidas, cobertura, coste, consentimiento y resultado por revisión ES/EN. Conserva consulta, nombres y fragmentos. Indica cobertura parcial cuando se alcanzan los límites. |
+| Exportación de archivos Proton | Exportación individual y por lotes, administración de perfiles de dispositivo/proyecto, progreso, revisión y consulta ES/EN. Los diálogos de exportación de Markdown y notas manuscritas envían títulos y filtros localizados. Los controles propios del sistema operativo conservan el idioma de Windows o Android. |
+| Editor y acciones del árbol | Formularios de archivo, búsqueda, catálogo y referencias conservan los nombres de usuario y traducen los controles. Las acciones de edición por lotes muestran coste, comparación y estado por documento ES/EN. Favoritos localiza la comprobación y el cierre explícito de un intento pendiente. |
+| Importación de archivos y carpetas | Revisión de destino y rutas, validaciones de selección, estados de progreso y resultado ES/EN. Los archivos conservan los nombres originales. El selector de archivos del sistema usa su propio idioma. |
+| Herramientas contextuales | Traducción, generación y subida de imágenes, comparación de propuestas e historial privado ES/EN. La barra de tinta, configuración de hojas, zoom, borrador, lápices y edición manual de transcripción localizan sus controles y conservan los nombres guardados y el contenido. |
+| Grabaciones y reuniones | Captura, lista, reproducción, transcripción, resumen y publicación ES/EN. Los nombres, texto de fuente, audio y revisiones mantienen su identidad. |
+| Runtime | Las superficies activas de Proton, IA, grabaciones, transferencias y actualizaciones usan el catálogo ES/EN. Los códigos externos o desconocidos reciben un mensaje localizado. Los selectores del sistema usan el idioma del dispositivo. |
+
+La vista inglesa de Configuración informa de que existen paneles especializados y mensajes todavía disponibles en español. La implementación no representa una localización completa de la aplicación.
+
+## Comprobación
+
+Las pruebas enfocadas verifican las claves de ambos diccionarios, el cambio controlado de navegación sin modificar texto del usuario, la normalización y persistencia del idioma, la actualización de `lang`, la búsqueda inglesa y los flujos de configuración existentes. La aceptación instalada de cambio de idioma, reinicio, teclado, lectores de pantalla y pantalla estrecha en Windows/Android sigue pendiente.
+
+Los diálogos manuscritos usan el diccionario tipado `handwrittenCopy` mediante el mismo proveedor controlado. Quince pruebas enfocadas cubren español predeterminado, controles ingleses de OCR/dibujo/dictado, combinación de páginas, inserción PNG, vista previa, exportación y captura local. Verifican que cambiar el idioma no cambie el prompt escrito, la propuesta, el OCR, las identidades, el nombre de exportación ni el Markdown insertado.
+
+Dispositivo y Actualizaciones usan `deviceSettingsCopy`. Trece pruebas enfocadas conservan los recorridos en español y verifican el almacenamiento inglés con formatos locales, diagnóstico explícito, estados parcial/no disponible, instalación bloqueada por cambios pendientes, progreso y regreso del instalador, instalación sin canal y conservación de notas/errores externos. Las pruebas usan servicios simulados; no consultan un proveedor de actualización ni descargan o instalan artefactos.
+
+Recuperación y Papelera usan `recoveryCopy`; el conflicto reutiliza `handwrittenCopy`. Diez pruebas enfocadas cubren español predeterminado e inglés, borrador huérfano, resultado parcial, nombre y destino de exportación intactos, confirmación antes de retirar copias originales, destino de restauración, falta de permiso y comprobación de un acuse perdido sin repetir la restauración. Los servicios están simulados; la localización no cambia rutas de escritura ni contratos nativos. Queda pendiente la aceptación instalada de foco, etiquetas largas, anuncios y retorno de vista en Windows/Android, y la traducción de mensajes procedentes del runtime y selectores nativos.
+
+### Riesgos y aceptación pendientes de estos paneles
+
+El cambio está limitado a presentación, formato y textos propios de error. No cambia el cálculo ni la conservación de archivos, el informe técnico, el canal de actualización, las reservas de reinicio ni la protección previa a instalar. Las actualizaciones candidatas siguen sin canal. Queda pendiente la aceptación instalada en Windows/Android de etiquetas largas, unidades y fechas, lectores de pantalla y transición al instalador del sistema. El instalador y los mensajes procedentes del runtime conservan su idioma original; su traducción requiere contratos propios, sin sustitución de frases.
+
+El marco `ProtonDocumentPane` usa el diccionario tipado `protonDocumentCopy`. Tres pruebas enfocadas verifican cambio ES/EN conservando título y Markdown, confirmación antes de descartar, guardado incierto bloqueado, herramientas en ancho estrecho y preview no disponible. La localización no altera comandos ni estados de persistencia. La aceptación instalada sigue pendiente.
+
+La exportación de archivos Proton utiliza `exportCopy`, con español predeterminado. La adaptación de `prepareProtonSavedBatch` acepta un idioma opcional solo para progreso y errores locales; no cambia selección, revisiones ni carga enviada. Las pruebas enfocadas conservan revisión parcial antes de entregar, cancelación, comprobación sin repetir, perfil observado y texto del documento. La aceptación instalada de selector del sistema, fechas, etiquetas largas y lector de pantalla sigue pendiente.

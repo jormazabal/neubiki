@@ -21,13 +21,18 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { ModalFrame } from "../../components/ui/ModalFrame";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
+import { InlineNotice } from "../../components/patterns/InlineNotice";
+import { DialogHeading } from "../../components/patterns/DialogHeading";
 import { createPortal } from "react-dom";
 import type { AiUsageCapabilitySummary, AiUsageModelSummary, AiUsageSummaryResponse, AppearanceConfig, AuthStatus } from "../../types/domain";
 import {useAiUsageScope} from "./useAiUsageScope";
+import {useUiLocale} from "../../lib/i18n/UiLocale";
 import {AiUsageLedgerControls} from "./AiUsageLedgerControls";
 import { WorkspaceAccountMenu } from "./WorkspaceAccountMenu";
 import { getProtonAccount, PROTON_ACCOUNT_CHANGED_EVENT } from "../../lib/api/protonDirect";
 import type { ProtonAccountStatus } from "../../types/protonDirect";
+import { ProtonUsageTable } from "./ProtonUsageTable";
 
 export type WorkspaceMenuAction = { id: string; label: string; icon: LucideIcon; onSelect: () => void; disabled?: boolean; badge?: string | number };
 
@@ -687,8 +692,17 @@ function AccountActionsMenuContent({
   );
 }
 
+export function ProtonAiUsageDialog({ onClose }: { onClose: () => void }) {
+  const language = useUiLocale();
+  return <AiUsagePanel variant="dialog" proton summary={null} loadOnOpen language={language}
+    text={{ ...projectActionsCopy[language], aiUsageTitle: language === "es" ? "Estadísticas de IA" : "AI usage" }} onClose={onClose}
+    onPin={() => {}} onHoverEnter={() => {}} onHoverLeave={() => {}} />;
+}
+
 function AiUsagePanel({
   variant = "flyout",
+  proton = false,
+  loadOnOpen = false,
   fallbackFocus,
   text,
   language,
@@ -699,6 +713,8 @@ function AiUsagePanel({
   onHoverLeave,
 }: {
   variant?: "flyout" | "dialog";
+  proton?: boolean;
+  loadOnOpen?: boolean;
   fallbackFocus?: () => HTMLElement | null;
   text: ProjectActionsCopy;
   language: AppearanceConfig["language"];
@@ -709,7 +725,10 @@ function AiUsagePanel({
   onHoverLeave: () => void;
 }) {
   const [view, setView] = useState<"capability" | "model">("capability");
-  const scope=useAiUsageScope(initialSummary);
+  const scope=useAiUsageScope(initialSummary, language);
+  useEffect(() => {
+    if (loadOnOpen) void scope.load();
+  }, [loadOnOpen]);
   const summary=scope.summary;
   const english=language==="en";
   const monthLabel = formatUsageMonth(scope.query.month, language);
@@ -719,8 +738,15 @@ function AiUsagePanel({
   const totals = getUsageTotals(summary);
   const hasUsage = totals.interactions > 0 || totals.totalTokens > 0 || totals.estimatedCost > 0;
   const unpriced=(summary?.legacyEntries??0)+(summary?.unpricedEntries??0);
+  const tableRow = (key: string, label: string, interactions: number, tokens: number, cost: number, withoutPrice = 0) => ({
+    key, label, interactions, tokens: formatInteger(tokens, language),
+    cost: withoutPrice >= interactions && withoutPrice > 0 ? "—" : formatCurrency(cost, language),
+  });
 
-  const header = (
+  const header = proton ? <div className="space-y-1">
+    <DialogHeading title={text.aiUsageTitle} onClose={onClose} closeLabel={text.aiUsageClose} />
+    <p className="text-sm text-ink-secondary">{monthLabel}{summary?.periodTimeZone && " · UTC"}</p>
+  </div> : (
       <div className="flex items-start gap-3">
         <div className="grid h-8 w-8 shrink-0 place-items-center rounded border border-brand-orange/20 bg-brand-hover text-brand-orange">
           <BarChart3 size={15} />
@@ -746,14 +772,17 @@ function AiUsagePanel({
         <div className="flex items-end gap-2"><label className="min-w-0 flex-1">{english?"Usage month (UTC)":"Mes de consumo (UTC)"}<input type="month" value={scope.query.month} onChange={event=>void scope.load({...scope.query,month:event.target.value})} className="mt-1 min-h-11 w-full min-w-0 rounded border border-line bg-white px-2"/></label><button type="button" onClick={()=>void scope.load()} disabled={scope.loading} className="min-h-11 shrink-0 rounded px-2 text-brand-dark hover:bg-brand-hover disabled:opacity-50">{english?"Refresh":"Actualizar"}</button></div>
       </div>
       {scope.loading&&<p role="status" className="mt-2 text-xs">{english?"Reading the selected scope…":"Consultando el alcance elegido…"}</p>}
-      {scope.error&&<p role="alert" className="mt-2 text-xs leading-5 text-red-700">{scope.error}</p>}
+      {scope.error && (proton ? <div className="mt-2"><InlineNotice tone="error" announce="alert">{scope.error}</InlineNotice></div>
+        : <p role="alert" className="mt-2 text-xs leading-5 text-red-700">{scope.error}</p>)}
       <AiBudgetControls key={`${scope.query.month}:${scope.query.projectId}`} month={scope.query.month} projectId={scope.query.projectId}/>
       {summary?.coverage&&<p className="mt-2 text-[11px] leading-5 text-ink-secondary">{summary.coverage==="local-period-aggregates"?(english?"Local period totals with recent detail; not the provider's complete bill.":"Totales locales por periodo y detalle reciente; no equivale a toda la facturación del proveedor."):(english?"Local estimate from retained records; not the provider's complete bill.":"Estimación de los registros locales conservados; no equivale a toda la facturación del proveedor.")}</p>}
       {summary?.legacyWindowOnly&&<p className="mt-2 text-xs leading-5 text-ink-secondary">{english?"Earlier history is limited to records available at conversion.":"El histórico anterior se limita a los registros disponibles al convertir."}</p>}
       {unpriced>0&&<p role="status" className="mt-2 text-xs leading-5">{english?`${unpriced} ${unpriced===1?"record has":"records have"} no available EUR amount. Totals include only available amounts.`:`${unpriced} ${unpriced===1?"registro":"registros"} sin importe EUR disponible. El total recoge solo los importes disponibles.`}</p>}
       {!!summary?.unscopedEntries&&<p className="mt-2 text-xs leading-5 text-ink-secondary">{english?`${summary.unscopedEntries} retained ${summary.unscopedEntries===1?"record has":"records have"} no attributable period.`:`${summary.unscopedEntries} ${summary.unscopedEntries===1?"registro conservado no tiene":"registros conservados no tienen"} periodo atribuible.`}</p>}
 
-      <div className="mt-3 grid grid-cols-2 rounded border border-line bg-panel p-0.5">
+      {proton ? <div className="mt-3"><SegmentedControl label="Agrupar uso de IA" value={view} onChange={setView}
+        options={[{ value: "capability", label: text.aiUsageByCapability }, { value: "model", label: text.aiUsageByModel }]} />
+      </div> : <div className="mt-3 grid grid-cols-2 rounded border border-line bg-panel p-0.5">
         <button
           type="button"
           className={`min-h-11 rounded text-[10px] font-semibold transition ${view === "capability" ? "bg-white text-brand-orange shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}
@@ -768,11 +797,16 @@ function AiUsagePanel({
         >
           {text.aiUsageByModel}
         </button>
-      </div>
+      </div>}
 
       {summary?.costNote && <details className="my-2 text-xs leading-5 text-ink-secondary"><summary className="flex min-h-11 cursor-pointer items-center">{english?"Data scope and quality":"Alcance y calidad de los datos"}</summary><p>{summary.costNote}</p><p>Registros heredados: {summary.legacyEntries ?? 0} · Sin importe EUR disponible: {summary.unpricedEntries ?? 0}</p><p>Sin periodo atribuible: {summary.unscopedEntries??0} · Detalle reciente: {summary.retainedEntries??"—"}/{summary.entryLimit??5000}</p>{summary.recordedEntries!==undefined&&<p>Registros contabilizados por periodo: {summary.recordedEntries}</p>}<p>Estimación USD disponible: ${(summary.totalEstimatedCostUsd ?? 0).toFixed(4)}</p>{summary.projectNamesComplete===false&&<p>Lista de proyectos parcial; no se consideran vacías las asociaciones no consultadas.</p>}{summary.exchangeRate?.usdPerEur ? <p>Cambio aplicado por trabajo. Última referencia: 1 EUR = {summary.exchangeRate.usdPerEur} USD · {summary.exchangeRate.date} {summary.exchangeRate.source && <a href={summary.exchangeRate.source} target="_blank" rel="noreferrer">BCE</a>}</p> : <p>{english?"No current exchange reference is available. Already recorded EUR amounts keep their applied rate.":"No hay referencia actual disponible. Los importes EUR ya registrados conservan el cambio que se les aplicó."}</p>}<AiUsageLedgerControls english={english} onChanged={()=>scope.load()}/></details>}
       {summary?.exchangeRateWarning&&<p role="alert" className="my-3 rounded bg-orange-50 p-3 text-xs leading-5 text-brand-dark">{summary.exchangeRateWarning} {language==="en"?"No conversion has been assumed; the saved reference is preserved.":"No se presupone conversión; la referencia guardada se conserva."}</p>}
-      {!summary ? (scope.loading?null:<div role="status" className="mt-3 rounded bg-panel px-3 py-4"><p className="text-xs font-semibold">{text.aiUsageUnavailableTitle}</p><p className="mt-1 text-xs leading-5 text-ink-secondary">{text.aiUsageUnavailableDetail}</p></div>) : hasUsage ? (
+      {!summary ? (scope.loading?null:<div role="status" className="mt-3 rounded-xl bg-panel px-3 py-4"><p className="text-sm font-semibold">{text.aiUsageUnavailableTitle}</p><p className="mt-1 text-xs leading-5 text-ink-secondary">{text.aiUsageUnavailableDetail}</p></div>) : hasUsage ? (
+        proton && activeRows.length > 0 ? <ProtonUsageTable firstColumn={view === "capability" ? "Herramienta" : "Modelo"}
+          rows={activeRows.map(row => "capability" in row
+            ? tableRow(row.capability, getCapabilityLabel(row, text), row.interactions, row.totalTokens, row.estimatedCost, row.unpricedEntries)
+            : tableRow(row.model, row.model, row.interactions, row.totalTokens, row.estimatedCost, row.unpricedEntries))}
+          totals={tableRow("total", text.aiUsageTotal, totals.interactions, totals.totalTokens, totals.estimatedCost, unpriced)} /> :
         <div className="mt-3 space-y-1.5">
           {activeRows.length > 0 ? (
             activeRows.map((row) => (
@@ -807,7 +841,7 @@ function AiUsagePanel({
           />
         </div>
       ) : (
-        <div className="mt-3 rounded border border-dashed border-line bg-panel px-3 py-4">
+        <div className="mt-3 rounded-xl border border-line bg-panel px-3 py-4">
           <p className="text-[11px] font-semibold text-ink-primary">{summary.unscopedEntries?(english?"No records attributable to this scope":"Sin registros atribuibles a este alcance"):text.aiUsageEmptyTitle}</p>
           <p className="mt-1 text-[10px] leading-4 text-ink-secondary">{summary.coverage?(english?"No retained local records match the selected project and month.":"No hay registros locales conservados para el proyecto y el mes elegidos."):text.aiUsageEmptyDetail}</p>
         </div>
@@ -817,10 +851,10 @@ function AiUsagePanel({
 
   if (variant === "dialog") {
     return (
-      <ModalFrame label={text.aiUsageTitle} onClose={onClose} fallbackFocus={fallbackFocus} className="!z-[170] !items-end">
+      <ModalFrame label={text.aiUsageTitle} onClose={onClose} fallbackFocus={fallbackFocus} className={proton ? "!z-[170]" : "!z-[170] !items-end"}>
         <div className="absolute inset-0" aria-hidden="true" onMouseDown={onClose} />
         <section
-          className="relative flex max-h-[min(560px,calc(100dvh-32px))] w-[min(420px,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border border-line bg-white shadow-menu"
+          className={proton ? "proton-usage-dialog relative flex flex-col" : "relative flex max-h-[min(560px,calc(100dvh-32px))] w-[min(420px,calc(100vw-32px))] flex-col overflow-hidden rounded-lg border border-line bg-white shadow-menu"}
           onMouseDown={(event) => event.stopPropagation()}
         >
           <div className="shrink-0 px-3 pt-3">{header}</div>

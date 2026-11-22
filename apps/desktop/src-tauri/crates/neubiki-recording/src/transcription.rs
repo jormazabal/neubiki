@@ -258,6 +258,10 @@ fn process(
     if session.chunks.iter().any(|c| c.status != "completed") {
         return Err("Faltan fragmentos por transcribir".into());
     }
+    if session.meeting {
+        service.request("job-update", json!({"id":session.id,"meetingTranscribed":true}))?;
+        return Ok(());
+    }
     let destination = session.destination.as_ref().ok_or("Elige una carpeta")?;
     let text = session
         .chunks

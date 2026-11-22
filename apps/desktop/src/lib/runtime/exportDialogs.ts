@@ -1,4 +1,5 @@
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import type { UiLanguage } from "../i18n/uiCopy";
 import type { ExportFormat, HandwrittenExportFormat } from "../../types/domain";
 
 type SaveFilePickerWindow = Window & {
@@ -37,24 +38,24 @@ const browserFileTypes: Record<ExportFormat, { description: string; accept: Reco
 };
 
 const handwrittenExportDialogFilters: Record<HandwrittenExportFormat, { name: string; extensions: string[] }> = {
-  knote: { name: "Neubiki handwritten note", extensions: ["knote"] },
+  nbnote: { name: "Nota manuscrita de Neubiki", extensions: ["nbnote"] },
   png: { name: "PNG", extensions: ["png"] },
   svg: { name: "SVG", extensions: ["svg"] },
   pdf: { name: "PDF", extensions: ["pdf"] },
 };
 
 const handwrittenBrowserFileTypes: Record<HandwrittenExportFormat, { description: string; accept: Record<string, string[]> }> = {
-  knote: { description: "Neubiki handwritten note", accept: { "application/vnd.neubiki.handwritten-note+json": [".knote"] } },
+  nbnote: { description: "Nota manuscrita de Neubiki", accept: { "application/vnd.neubiki.handwritten-note+json": [".nbnote"] } },
   png: { description: "PNG", accept: { "image/png": [".png"] } },
   svg: { description: "SVG", accept: { "image/svg+xml": [".svg"] } },
   pdf: { description: "PDF", accept: { "application/pdf": [".pdf"] } },
 };
 
-export async function selectExportFilePath(defaultFileName: string, format: ExportFormat): Promise<string | null> {
+export async function selectExportFilePath(defaultFileName: string, format: ExportFormat, language: UiLanguage = "es"): Promise<string | null> {
   if (!isTauriRuntime()) return null;
 
   return saveDialog({
-      title: "Exportar documento",
+      title: language === "en" ? "Export document" : "Exportar documento",
       defaultPath: withExportExtension(defaultFileName, format),
       filters: [exportDialogFilters[format]],
     });
@@ -92,13 +93,14 @@ export async function selectBrowserExportTarget(defaultFileName: string, format:
   return createDownloadTarget(fileName);
 }
 
-export async function selectHandwrittenExportFilePath(defaultFileName: string, format: HandwrittenExportFormat): Promise<string | null> {
+export async function selectHandwrittenExportFilePath(defaultFileName: string, format: HandwrittenExportFormat, language: UiLanguage = "es"): Promise<string | null> {
   if (!isTauriRuntime()) return null;
 
+  const filter = handwrittenExportDialogFilters[format];
   return saveDialog({
-      title: "Exportar nota a mano",
+      title: language === "en" ? "Export handwritten note" : "Exportar nota manuscrita",
       defaultPath: withHandwrittenExportExtension(defaultFileName, format),
-      filters: [handwrittenExportDialogFilters[format]],
+      filters: [language === "en" && format === "nbnote" ? { ...filter, name: "Neubiki handwritten note" } : filter],
     });
 }
 
@@ -136,7 +138,7 @@ export async function selectBrowserHandwrittenExportTarget(defaultFileName: stri
 
 export function withExportExtension(fileName: string, format: ExportFormat) {
   const extension = `.${format}`;
-  const withoutMarkdownExtension = fileName.replace(/\.[Mm][Dd]$/, "");
+  const withoutMarkdownExtension = fileName.replace(/\.(?:md|markdown|mdown)$/i, "");
   return withoutMarkdownExtension.toLowerCase().endsWith(extension)
     ? withoutMarkdownExtension
     : `${withoutMarkdownExtension}${extension}`;
@@ -144,7 +146,7 @@ export function withExportExtension(fileName: string, format: ExportFormat) {
 
 export function withHandwrittenExportExtension(fileName: string, format: HandwrittenExportFormat) {
   const extension = `.${format}`;
-  const withoutKnownExtensions = fileName.replace(/\.(knote|png|svg|pdf)$/i, "");
+  const withoutKnownExtensions = fileName.replace(/\.(?:nbnote|knote|png|svg|pdf)$/i, "");
   return withoutKnownExtensions.toLowerCase().endsWith(extension)
     ? withoutKnownExtensions
     : `${withoutKnownExtensions}${extension}`;

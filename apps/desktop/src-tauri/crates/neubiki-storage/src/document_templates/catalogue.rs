@@ -143,6 +143,7 @@ impl LocalApi {
         body: Value,
         apply: bool,
     ) -> Result<Value, String> {
+        let _write=if apply {Some(CATALOG_WRITE.lock().map_err(|_|"No se puede reservar el catálogo de plantillas")?)}else{None};
         let input: Import = serde_json::from_value(body)
             .map_err(|_| "La revisión necesita archivo, digest y nombres elegidos")?;
         if input.content.len() as u64 > MAX_FILE
@@ -186,6 +187,7 @@ impl LocalApi {
         for entry in input.entries {
             let portable = &templates[entry.index];
             let record = Record {
+                capture_digest:None,
                 schema_version: portable.schema_version,
                 resources: portable.resources.clone(),
                 id: format!("custom-{}", neubiki_core::compact_id("template")),

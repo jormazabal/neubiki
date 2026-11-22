@@ -1,5 +1,7 @@
 # Frontend Structure
 
+For the active Neubiki workspace, see the [component architecture](componentes-ui.md).
+
 > Referencia de los módulos heredados. El [diseño de Neubiki](../product/neubiki.md) define el alcance de la aplicación actual.
 
 The frontend is React + TypeScript and renders product state received through the API boundary under `apps/desktop/src/lib/api`.

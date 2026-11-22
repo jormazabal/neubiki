@@ -6,6 +6,7 @@ import {listProjects,getProjectTree} from "../../lib/api/projects";
 import { recordingRequest } from "../../lib/api/recordings";
 import { useState } from "react";
 import { ModalFrame } from "../../components/ui/ModalFrame";
+import { UiLocaleProvider } from "../../lib/i18n/UiLocale";
 vi.mock("./useRecordings",()=>({useRecordings:vi.fn()}));
 vi.mock("../../lib/api/recordings",()=>({recordingRequest:vi.fn(),recordingAudio:vi.fn(),recordingTranscript:vi.fn()}));
 vi.mock("../../lib/api/projects",()=>({listProjects:vi.fn().mockResolvedValue([]),getProjectTree:vi.fn().mockResolvedValue([])}));
@@ -15,6 +16,24 @@ const base={revision:1,sessions:[],settings,levels:[0,0],preview:false,captureOw
 const command=vi.fn();
 beforeEach(()=>{vi.mocked(listProjects).mockResolvedValue([]);vi.mocked(getProjectTree).mockResolvedValue([]);command.mockReset();vi.mocked(recordingRequest).mockResolvedValue([] as never);vi.mocked(useRecordings).mockReturnValue({snapshot:base,error:null,busy:null,command} as never);});
 afterEach(cleanup);
+
+it("localizes capture, history and confirmation while preserving the saved session name",()=>{
+  const session={id:"english-view",revision:1,createdAt:"2026-11-04T12:00:00Z",status:"ready",
+    settings,destination:{projectId:"owned",folderId:null,name:"Reunión guardada"},samples:48000,
+    bytes:96000,error:null,chunks:[],documentId:null,completedAt:null,keep:false,audioDeleted:false,recovered:false};
+  vi.mocked(useRecordings).mockReturnValue({snapshot:{...base,sessions:[session]},error:null,busy:null,command} as never);
+  render(<UiLocaleProvider language="en"><RecordingPanel compact embedded onClose={vi.fn()}/></UiLocaleProvider>);
+  expect(screen.getByRole("button",{name:"Start recording"})).toBeEnabled();
+  expect(screen.getByRole("meter",{name:"Microphone level"})).toHaveAttribute("aria-valuetext","Untested");
+  fireEvent.click(screen.getByRole("button",{name:"Sessions (1)"}));
+  expect(screen.getByRole("heading",{name:"Reunión guardada"})).toBeVisible();
+  expect(screen.getByText("Ready to transcribe")).toBeVisible();
+  fireEvent.click(screen.getByRole("button",{name:"Delete audio"}));
+  const confirmation=screen.getByRole("alertdialog",{name:"Confirm action"});
+  expect(confirmation).toHaveTextContent("Deleting local audio is permanent");
+  fireEvent.click(within(confirmation).getByRole("button",{name:"Cancel"}));
+  expect(command).not.toHaveBeenCalled();
+});
 describe("meeting recording flow",()=>{
  it("does not capture on opening and starts with the selected folder and edited name",async()=>{
   render(<RecordingPanel initialDestination={{projectId:"p",folderId:"p::notes",name:"Reunión.md"}}/>);
@@ -106,6 +125,24 @@ describe("recording modal boundaries",()=>{
   let finish!:(value:unknown)=>void;command.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));mount();fireEvent.click(screen.getByRole("button",{name:"Eliminar audio"}));const dialog=screen.getByRole("alertdialog");const confirm=within(dialog).getByRole("button",{name:"Confirmar"});fireEvent.click(confirm);expect(confirm).toBeDisabled();expect(dialog).toHaveFocus();fireEvent.keyDown(dialog,{key:"Escape"});expect(dialog).toBeInTheDocument();fireEvent.click(confirm);expect(command).toHaveBeenCalledTimes(1);await act(async()=>finish(base));await waitFor(()=>expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
  });
  it("protects destination selection, visible errors and saving against Escape or duplicate submit",async()=>{
-  vi.mocked(listProjects).mockResolvedValue([{id:"p",name:"Proyecto de prueba"}] as never);vi.mocked(getProjectTree).mockResolvedValue([{id:"p::notes",name:"Notas",type:"folder",path:"notes",children:[]}]);let fail!:(error:Error)=>void;command.mockImplementation(()=>new Promise((_,reject)=>{fail=reject;}));mount();const trigger=screen.getByRole("button",{name:"Elegir carpeta"});trigger.focus();fireEvent.click(trigger);const dialog=screen.getByRole("dialog",{name:"Destino de la transcripción"});await screen.findByRole("option",{name:"Proyecto de prueba"});await screen.findByRole("option",{name:"Notas"});const project=within(dialog).getByLabelText("Proyecto"),folder=within(dialog).getByLabelText("Carpeta");expect(project).toHaveFocus();expect(project).toHaveValue("p");expect(folder).toHaveValue("p::notes");fireEvent.change(within(dialog).getByLabelText("Nombre"),{target:{value:"Conservar selección.md"}});fireEvent.click(within(dialog).getByRole("button",{name:"Transcribir y guardar"}));expect(dialog).toHaveFocus();fireEvent.keyDown(dialog,{key:"Escape"});expect(dialog).toBeInTheDocument();expect(within(dialog).getByRole("button",{name:"Cancelar"})).toBeDisabled();fireEvent.submit(dialog.querySelector("form")!);expect(command).toHaveBeenCalledTimes(1);await act(async()=>fail(Error("Destino temporalmente no disponible")));expect(await within(dialog).findByRole("alert")).toHaveTextContent("Destino temporalmente no disponible");expect(project).toHaveValue("p");expect(folder).toHaveValue("p::notes");expect(within(dialog).getByLabelText("Nombre")).toHaveValue("Conservar selección.md");fireEvent.keyDown(dialog,{key:"Escape"});await waitFor(()=>expect(screen.queryByRole("dialog")).not.toBeInTheDocument());expect(trigger).toHaveFocus();expect(command).toHaveBeenCalledWith("destination",{id:"modal-session",destination:{projectId:"p",folderId:"p::notes",name:"Conservar selección.md"}});
+  vi.mocked(listProjects).mockResolvedValue([{id:"p",name:"Proyecto de prueba"}] as never);vi.mocked(getProjectTree).mockResolvedValue([{id:"p::notes",name:"Notas",type:"folder",path:"notes",children:[]}]);let fail!:(error:Error)=>void;command.mockImplementation(()=>new Promise((_,reject)=>{fail=reject;}));mount();const trigger=screen.getByRole("button",{name:"Elegir carpeta"});trigger.focus();fireEvent.click(trigger);const dialog=screen.getByRole("dialog",{name:"Destino de la transcripción"});await screen.findByRole("option",{name:"Proyecto de prueba"});await screen.findByRole("option",{name:"Notas"});const project=within(dialog).getByLabelText("Proyecto"),folder=within(dialog).getByLabelText("Carpeta");expect(project).toHaveFocus();expect(project).toHaveValue("p");expect(folder).toHaveValue("p::notes");fireEvent.change(within(dialog).getByLabelText("Nombre"),{target:{value:"Conservar selección.md"}});fireEvent.click(within(dialog).getByRole("button",{name:"Transcribir y guardar"}));expect(dialog).toHaveFocus();fireEvent.keyDown(dialog,{key:"Escape"});expect(dialog).toBeInTheDocument();expect(within(dialog).getByRole("button",{name:"Cancelar"})).toBeDisabled();fireEvent.submit(dialog.querySelector("form")!);expect(command).toHaveBeenCalledTimes(1);await act(async()=>fail(Error("Destino temporalmente no disponible")));expect(await within(dialog).findByRole("alert")).toHaveTextContent("No se pudo confirmar el destino. Comprueba que siga disponible.");expect(project).toHaveValue("p");expect(folder).toHaveValue("p::notes");expect(within(dialog).getByLabelText("Nombre")).toHaveValue("Conservar selección.md");fireEvent.keyDown(dialog,{key:"Escape"});await waitFor(()=>expect(screen.queryByRole("dialog")).not.toBeInTheDocument());expect(trigger).toHaveFocus();expect(command).toHaveBeenCalledWith("destination",{id:"modal-session",destination:{projectId:"p",folderId:"p::notes",name:"Conservar selección.md"}});
  });
+});
+
+it("queues a private meeting only after explicit audio consent", async () => {
+  const meeting = {
+    id: "private", meeting: true, revision: 1, createdAt: "2026-11-16T10:00:00Z", status: "ready", settings,
+    destination: { projectId: "neubiki-private-meetings", folderId: null, name: "Reunión privada" },
+    samples: 48000, bytes: 96000, error: null, chunks: [], documentId: null, completedAt: null,
+    keep: false, audioDeleted: false, recovered: false,
+  };
+  vi.mocked(useRecordings).mockReturnValue({ snapshot: { ...base, sessions: [meeting] }, error: null, busy: null, command } as never);
+  render(<RecordingPanel meetingMode embedded />);
+  fireEvent.click(screen.getByRole("button", { name: "Transcribir" }));
+  const consent = screen.getByRole("alertdialog");
+  expect(consent).toHaveTextContent(/audio a OpenAI/);
+  expect(command).not.toHaveBeenCalled();
+  fireEvent.click(within(consent).getByRole("button", { name: "Confirmar" }));
+  expect(command).toHaveBeenCalledWith("queue", { id: "private", confirmed: true, confirmUnknown: true });
+  await waitFor(() => expect(consent).not.toBeInTheDocument());
 });

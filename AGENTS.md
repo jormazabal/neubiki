@@ -44,6 +44,13 @@ Neubiki is an independent Windows and Android Tauri application for working with
 - Do not mix business logic into visual-only components.
 - Do not call mock data directly from arbitrary components; use the API layer.
 
+## UI Component Architecture
+
+- Develop new and changed UI through the [design system catalog](docs/product/design-system/componentes.md) and the [component architecture](docs/architecture/componentes-ui.md). Start from the component that owns the interaction. Reuse or compose existing components before adding a variant or a component.
+- Keep shared primitives in `components/ui`, shared visual compositions in `components/patterns`, and product-specific views, state adapters and hooks in `features`. Shared visual code depends on other permitted visual layers, styles and pure theme helpers. Access to native APIs and domain state belongs in feature controllers, API modules and runtime adapters.
+- Define and validate a new component or visual variant against a concrete workflow before adding it to the system. Record its contract, variants, accessibility, platform behavior, owning source and validation in the [catalog and change history](docs/product/design-system/README.md). Include reuse and platform evidence in UI reviews.
+- Preserve a single product-state owner and adapt layout to platform and available width. Test critical interactions and run the component boundary check as part of the frontend suite.
+
 ## Milkdown Rules
 
 - Milkdown is the required visual Markdown editor.
@@ -87,16 +94,9 @@ Neubiki is an independent Windows and Android Tauri application for working with
 
 ## Visual Design Rules
 
-- Primary action color: `#F37021`.
-- Dark orange: `#D85A12`.
-- Main text: `#111827`.
-- Secondary text: `#6B7280`.
-- Soft border: `#E5E7EB`.
-- Main background: `#FFFFFF`.
-- Sidebar background: `#FAFAFA`.
-- Orange hover: `#FFF1E8`.
-- Do not use blue as the primary action color.
-- Use a white main canvas, light left panel, subtle borders, and very soft shadows.
+- Follow the [design system foundations](docs/product/design-system/fundamentos.md) and the [appearance palettes](docs/architecture/paletas-apariencia.md). Orange (`#F37021` brand sample) is the default palette. Primary actions use accessible accent tokens for the chosen palette and surface. Use separate semantic tokens for status.
+- Use the same background on the window frame and left navigation. In Settings, indicate the active item with a soft fill, text and icon, with no leading border. Keep keyboard focus visible as a separate state.
+- Use pronounced rounded main surfaces, pill-shaped actions and modest type sizes. Keep borders and shadows subtle and use the configured appearance profile for surface colors.
 - Keep the UI compact and operational.
 - Do not add a search input to the sidebar header.
 - Do not add an external plus button next to the project selector.

@@ -1,5 +1,6 @@
 import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { floatingViewportPixels } from "../../lib/theme/floatingViewport";
 
 type Rect = { left: number; right: number; top: number; bottom: number };
 type Viewport = { left: number; top: number; width: number; height: number };
@@ -79,7 +80,9 @@ export function FloatingLayer({ anchorRef, width, side = false, align = "start",
   }
   return createPortal(<LayerDepth.Provider value={depth + 1}>
     <div ref={ref} data-floating-layer aria-label={label}
-      style={{ position: "fixed", left: position.left, top: position.top, width, maxWidth: viewport.width - 16, maxHeight: viewport.height - 16, overflowY: "auto", overscrollBehavior: "contain", zIndex: 110 + depth, pointerEvents: anchorVisible ? "auto" : "none", visibility: anchorVisible ? "visible" : "hidden" }}
+      style={{ position: "fixed", left: floatingViewportPixels(position.left), top: floatingViewportPixels(position.top), width,
+        maxWidth: floatingViewportPixels(viewport.width - 16), maxHeight: floatingViewportPixels(viewport.height - 16),
+        overflowY: "auto", overscrollBehavior: "contain", zIndex: 110 + depth, pointerEvents: anchorVisible ? "auto" : "none", visibility: anchorVisible ? "visible" : "hidden" }}
       className="rounded-2xl bg-white text-ink-primary shadow-menu"
       onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => {

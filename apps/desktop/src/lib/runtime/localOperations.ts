@@ -1,5 +1,5 @@
 import {queryRuntimeOperations,cancelRuntimeOperation,queryRuntimeContinuity} from "../api/operationRuntime";
-import {ApiError} from "../api/errors";
+import {ApiError,apiErrorFromNativeRejection} from "../api/errors";
 import type {LocalOperation, RuntimeOperation} from "../../types/operations";
 
 const listeners=new Set<()=>void>();
@@ -72,11 +72,12 @@ export async function runLocalOperation<T>(execute:(id:string)=>Promise<T>,optio
       const notStarted=["operation-cancelled","operation-expired","operation-queue-full","operation-already-registered","invalid-operation-id","invalid-operation-resource","invalid-runtime-request","runtime-restart-reserved"];
       const error=typeof failure==="string"&&notStarted.includes(failure)
         ?stopped(failure,failure==="operation-cancelled"?"La operación se canceló antes de empezar.":"La operación no llegó a iniciarse. Revisa los trabajos pendientes.")
-        :failure==="operation-stopped-before-publication"?new ApiError(409,"Trabajo detenido","Se confirmó la detención en un punto seguro antes de publicar. No se repite la operación.","not-applied",failure,id):failure==="github-session-changed"?new ApiError(409,"Sesión sustituida","La sesión cambió y esta respuesta anterior no se ha publicado.","not-applied",failure,id):failure instanceof ApiError?failure:new ApiError(502,"Resultado sin confirmar",typeof failure==="string"?failure:failure instanceof Error?failure.message:"No se pudo confirmar el resultado de la operación.","unknown","runtime-operation-unconfirmed",id);
+        :failure==="operation-stopped-before-publication"?new ApiError(409,"Trabajo detenido","Se confirmó la detención en un punto seguro antes de publicar. No se repite la operación.","not-applied",failure,id):failure==="github-session-changed"?new ApiError(409,"Sesión sustituida","La sesión cambió y esta respuesta anterior no se ha publicado.","not-applied",failure,id):apiErrorFromNativeRejection(failure)??new ApiError(502,"Resultado sin confirmar",typeof failure==="string"?failure:failure instanceof Error?failure.message:"No se pudo confirmar el resultado de la operación.","unknown","runtime-operation-unconfirmed",id);
       error.operationId??=id;
       const known=error instanceof ApiError&&(error.operationOutcome==="not-started"||error.operationOutcome==="not-applied");
       const cancelled=known&&(error.code==="operation-cancelled"||error.code==="operation-stopped-before-publication");
-      update(id,{stoppedAfterStart:error.operationOutcome==="not-applied"&&cancelled,phase:cancelled?"cancelled":error instanceof ApiError&&error.status<500?"failed":"unknown",cancellable:false,unconfirmed:timedOut||!known&&!(error instanceof ApiError&&error.status<500)});
+      const unconfirmed=error.operationOutcome==="unknown"||(!known&&error.status>=500);
+      update(id,{stoppedAfterStart:error.operationOutcome==="not-applied"&&cancelled,phase:cancelled?"cancelled":unconfirmed?"unknown":"failed",cancellable:false,unconfirmed:timedOut||unconfirmed});
       throw error;
     });
     const interrupted=new Promise<never>((_resolve,reject)=>{

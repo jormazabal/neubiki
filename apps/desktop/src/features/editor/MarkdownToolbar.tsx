@@ -34,11 +34,13 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { floatingViewportPixels } from "../../lib/theme/floatingViewport";
 import { ModalFrame } from "../../components/ui/ModalFrame";
 import { editorToolsViewport, MarkdownToolsPanel, observeEditorToolsViewport, type MarkdownToolsPinControl } from "./MarkdownToolsPanel";
 import type { MarkdownEditorAction, MarkdownEditorActionOptions, MarkdownEditorFormatState, MarkdownEditorHistoryState } from "./editorTypes";
 import { markdownHighlightColors, type MarkdownHighlightColorId } from "./highlightPalette";
 import type { ExportFormat } from "../../types/domain";
+import { useMarkdownToolbarCopy, type MarkdownToolbarCopy } from "./markdownToolbarCopy";
 
 type ToolbarAction = {
   label: string;
@@ -49,42 +51,45 @@ type ToolbarAction = {
   options?: MarkdownEditorActionOptions;
 };
 
-const blockFormats = [
-  { label: "Normal", action: "paragraph", icon: Pilcrow },
-  { label: "Título 1", action: "heading-1", icon: Heading1 },
-  { label: "Título 2", action: "heading-2", icon: Heading2 },
-  { label: "Título 3", action: "heading-3", icon: Heading3 },
-  { label: "Título 4", action: "heading-4", icon: Heading3 },
-  { label: "Título 5", action: "heading-5", icon: Heading3 },
-  { label: "Título 6", action: "heading-6", icon: Heading3 },
-] satisfies Array<{ label: string; action: MarkdownEditorAction; icon: LucideIcon }>;
+function blockFormatsFor(t: MarkdownToolbarCopy) {
+  return [
+    { label: t.normal, action: "paragraph", icon: Pilcrow },
+    { label: t.heading(1), action: "heading-1", icon: Heading1 },
+    { label: t.heading(2), action: "heading-2", icon: Heading2 },
+    { label: t.heading(3), action: "heading-3", icon: Heading3 },
+    { label: t.heading(4), action: "heading-4", icon: Heading3 },
+    { label: t.heading(5), action: "heading-5", icon: Heading3 },
+    { label: t.heading(6), action: "heading-6", icon: Heading3 },
+  ] satisfies ToolbarAction[];
+}
 
-const primaryInlineTools = [
-  { label: "Negrita", icon: Bold, action: "bold" },
-  { label: "Cursiva", icon: Italic, action: "italic" },
-] satisfies ToolbarAction[];
-
-const secondaryInlineTools = [
-  { label: "Tachado", icon: Strikethrough, action: "strike" },
-  { label: "Subrayado", compactLabel: "Subrayado HTML", icon: Underline, action: "underline", extended: true },
-  { label: "Código inline", icon: Code2, action: "inline-code" },
-  { label: "Borrar formato", icon: RemoveFormatting, action: "clear-format" },
-] satisfies ToolbarAction[];
-
-const structureTools = [
-  { label: "Lista con viñetas", compactLabel: "Viñetas", icon: List, action: "bullet-list" },
-  { label: "Lista numerada", compactLabel: "Numerada", icon: ListOrdered, action: "ordered-list" },
-  { label: "Checklist", icon: CheckSquare, action: "check-list" },
-  { label: "Cita", icon: Quote, action: "quote" },
-  { label: "Bloque de código", icon: Code2, action: "code-block" },
-  { label: "Separador horizontal", compactLabel: "Separador", icon: Minus, action: "horizontal-rule" },
-] satisfies ToolbarAction[];
-
-const insertionTools = [
-  { label: "Enlace", icon: Link, action: "link" },
-  { label: "Imagen", icon: Image, action: "image" },
-  { label: "Diagrama", icon: Workflow, action: "diagram" },
-] satisfies ToolbarAction[];
+function toolbarActions(t: MarkdownToolbarCopy) {
+  return {
+    primaryInlineTools: [
+      { label: t.bold, icon: Bold, action: "bold" },
+      { label: t.italic, icon: Italic, action: "italic" },
+    ],
+    secondaryInlineTools: [
+      { label: t.strike, icon: Strikethrough, action: "strike" },
+      { label: t.underline, compactLabel: t.underlineHtml, icon: Underline, action: "underline", extended: true },
+      { label: t.inlineCode, icon: Code2, action: "inline-code" },
+      { label: t.clear, icon: RemoveFormatting, action: "clear-format" },
+    ],
+    structureTools: [
+      { label: t.bullets, compactLabel: t.shortBullets, icon: List, action: "bullet-list" },
+      { label: t.ordered, compactLabel: t.shortOrdered, icon: ListOrdered, action: "ordered-list" },
+      { label: t.checklist, icon: CheckSquare, action: "check-list" },
+      { label: t.quote, icon: Quote, action: "quote" },
+      { label: t.code, icon: Code2, action: "code-block" },
+      { label: t.rule, compactLabel: t.shortRule, icon: Minus, action: "horizontal-rule" },
+    ],
+    insertionTools: [
+      { label: t.link, icon: Link, action: "link" },
+      { label: t.image, icon: Image, action: "image" },
+      { label: t.diagram, icon: Workflow, action: "diagram" },
+    ],
+  } satisfies Record<string, ToolbarAction[]>;
+}
 
 const markdownZoomOptions = [80, 90, 100, 110, 125, 150];
 
@@ -133,6 +138,8 @@ export function MarkdownToolbar({
   onToggleMarkdownSource,
   onToggleHistory,
 }: MarkdownToolbarProps) {
+  const t = useMarkdownToolbarCopy();
+  const { primaryInlineTools, secondaryInlineTools, structureTools, insertionTools } = toolbarActions(t);
   const [openMenu, setOpenMenu] = useState<"block" | "format" | "highlight" | "structure" | "insert" | "table" | "export" | "zoom" | null>(null);
   const [compactOptionsOpen, setCompactOptionsOpen] = useState(false);
   const [hoveredTableSize, setHoveredTableSize] = useState({ rows: 3, columns: 4 });
@@ -181,6 +188,7 @@ export function MarkdownToolbar({
   }, [openMenu, contextual]);
 
   const visibleSecondaryInlineTools = secondaryInlineTools.filter((tool) => !tool.extended || extendedUnderlineEnabled);
+  const blockFormats = blockFormatsFor(t);
   const currentBlockFormat = blockFormats.find((format) => activeActions[format.action]) ?? blockFormats[0];
 
   function keepEditorSelection(event: MouseEvent<HTMLButtonElement>) {
@@ -243,7 +251,7 @@ export function MarkdownToolbar({
 
   const tablePicker = (
     <div className="relative">
-      <ToolbarMenuButton label="Tabla" icon={Table} disabled={!editorReady} expanded={openMenu === "table"}
+      <ToolbarMenuButton label={t.table} icon={Table} disabled={!editorReady} expanded={openMenu === "table"}
         onMouseDown={keepEditorSelection} onClick={(event) => toggleMenu("table", event)} />
       {openMenu === "table" &&
         <TablePicker rows={hoveredTableSize.rows} columns={hoveredTableSize.columns}
@@ -265,13 +273,13 @@ export function MarkdownToolbar({
     <>
       <button type="button"
         className={`toolbar-button neubiki-history-button ${historyOpen ? "toolbar-button-active" : ""} ${historyEnabled ? "" : "opacity-40"}`}
-        data-tooltip={historyEnabled ? "Histórico de versiones" : historyDisabledReason}
-        aria-label="Histórico de versiones" disabled={!historyEnabled} onMouseDown={keepEditorSelection}
+        data-tooltip={historyEnabled ? t.history : historyDisabledReason}
+        aria-label={t.history} disabled={!historyEnabled} onMouseDown={keepEditorSelection}
         onClick={() => closeMenuThen(onToggleHistory)}>
         <History size={15} />
       </button>
       <div className="neubiki-document-export-menu relative">
-        <ToolbarMenuButton label="Exportar documento" icon={Download} disabled={!editorReady} expanded={openMenu === "export"}
+        <ToolbarMenuButton label={t.export} icon={Download} disabled={!editorReady} expanded={openMenu === "export"}
           onMouseDown={keepEditorSelection} onClick={(event) => toggleMenu("export", event)} />
         {openMenu === "export" && (
           <ToolbarMenu align="right">
@@ -281,7 +289,7 @@ export function MarkdownToolbar({
             {onSaveTemplate && (
               <button role="menuitem" className="flex min-h-9 w-full items-center gap-2 rounded px-2 text-left text-[11px] hover:bg-brand-hover"
                 onMouseDown={keepEditorSelection} onClick={() => closeMenuThen(onSaveTemplate)}>
-                <BookOpen size={14} />Guardar como plantilla…
+                <BookOpen size={14} />{t.template}
               </button>
             )}
           </ToolbarMenu>
@@ -296,11 +304,11 @@ export function MarkdownToolbar({
   const zoomSelector = (
     <div className="relative shrink-0">
       {contextual ? (
-        <ToolbarMenuButton label="Zoom del visualizador Markdown" icon={ZoomIn} disabled={false} expanded={openMenu === "zoom"}
+        <ToolbarMenuButton label={t.zoom} icon={ZoomIn} disabled={false} expanded={openMenu === "zoom"}
           onMouseDown={keepEditorSelection} onClick={(event) => toggleMenu("zoom", event)} />
       ) : (
         <button type="button" className="toolbar-select neubiki-markdown-zoom-select"
-          aria-label="Zoom del visualizador Markdown" aria-haspopup="menu" aria-expanded={openMenu === "zoom"}
+          aria-label={t.zoom} aria-haspopup="menu" aria-expanded={openMenu === "zoom"}
           onMouseDown={keepEditorSelection} onClick={(event) => toggleMenu("zoom", event)}>
           <ZoomIn size={13} />
           <span className="toolbar-select-label">{markdownZoomPercent}%</span>
@@ -323,21 +331,21 @@ export function MarkdownToolbar({
 
   if (contextual) {
     return (
-      <div ref={toolbarRef} role="toolbar" aria-label="Herramientas del documento" data-menu-entry={menuEntry.current}
+      <div ref={toolbarRef} role="toolbar" aria-label={t.toolbar} data-menu-entry={menuEntry.current}
         onKeyDown={toolbarKey} onFocus={toolbarFocus} onClickCapture={menuActionFocus} className="neubiki-editor-palette-tools">
-        <PaletteGroup title="Texto" end={blockSelect}>
+        <PaletteGroup title={t.text} end={blockSelect}>
           {primaryInlineTools.map(tool => toolButton(tool))}
           {visibleSecondaryInlineTools.map(tool => toolButton(tool))}
           {highlight}
         </PaletteGroup>
-        <PaletteGroup title="Bloques e inserción">
+        <PaletteGroup title={t.blocks}>
           {structureTools.map(tool => toolButton(tool, tool.action === "code-block" ? TerminalSquare : tool.icon))}
           {insertionTools.filter(tool =>
             (tool.action !== "image" || imageInsertionEnabled) && (tool.action !== "diagram" || diagramInsertionEnabled)
           ).map(tool => toolButton(tool))}
           {tablePicker}
         </PaletteGroup>
-        <PaletteGroup title="Documento">
+        <PaletteGroup title={t.document}>
           {documentActions}
           {sourceToggle}
           {zoomSelector}
@@ -349,7 +357,7 @@ export function MarkdownToolbar({
 
   if (compactToolbar) {
     return (
-      <div ref={toolbarRef} role="toolbar" aria-label="Herramientas del documento" data-menu-entry={menuEntry.current} onKeyDown={toolbarKey} onFocus={toolbarFocus} onClickCapture={menuActionFocus} className="neubiki-editor-toolbar neubiki-editor-toolbar-compact flex h-9 shrink-0 items-center gap-1 border-b border-line bg-white px-2">
+      <div ref={toolbarRef} role="toolbar" aria-label={t.toolbar} data-menu-entry={menuEntry.current} onKeyDown={toolbarKey} onFocus={toolbarFocus} onClickCapture={menuActionFocus} className="neubiki-editor-toolbar neubiki-editor-toolbar-compact flex h-9 shrink-0 items-center gap-1 border-b border-line bg-white px-2">
         {blockSelect}
 
         <ToolbarIconButton
@@ -367,7 +375,7 @@ export function MarkdownToolbar({
           onRun={() => runAction(primaryInlineTools[1].action)}
         />
         <ToolbarMenuButton
-          label="Más opciones"
+          label={t.more}
           icon={MoreHorizontal}
           popup="dialog"
           disabled={false}
@@ -389,7 +397,7 @@ export function MarkdownToolbar({
         />
 
         {compactOptionsOpen && createPortal(
-          <ModalFrame label="Formato del texto" onClose={() => setCompactOptionsOpen(false)} className="neubiki-editor-palette-modal">
+          <ModalFrame label={t.palette} onClose={() => setCompactOptionsOpen(false)} className="neubiki-editor-palette-modal">
             <MarkdownToolsPanel panelRef={compactPanelRef} onClose={() => setCompactOptionsOpen(false)}
               pin={pinControl && { pinned: pinControl.pinned, onChange: (value) => { setCompactOptionsOpen(false); pinControl.onChange(value); } }}>
               <MarkdownToolbar contextual
@@ -412,7 +420,7 @@ export function MarkdownToolbar({
   }
 
   return (
-    <div ref={toolbarRef} role="toolbar" aria-label="Herramientas del documento" data-menu-entry={menuEntry.current} onKeyDown={toolbarKey} onFocus={toolbarFocus} onClickCapture={menuActionFocus} className="neubiki-editor-toolbar flex h-9 shrink-0 items-center gap-1 border-b border-line bg-white px-3">
+    <div ref={toolbarRef} role="toolbar" aria-label={t.toolbar} data-menu-entry={menuEntry.current} onKeyDown={toolbarKey} onFocus={toolbarFocus} onClickCapture={menuActionFocus} className="neubiki-editor-toolbar flex h-9 shrink-0 items-center gap-1 border-b border-line bg-white px-3">
       {blockSelect}
 
       <ToolbarDivider />
@@ -434,7 +442,7 @@ export function MarkdownToolbar({
         </div>
         <div className="neubiki-toolbar-compact-menu relative">
           <ToolbarMenuButton
-            label="Formato"
+            label={t.format}
             icon={MoreHorizontal}
             disabled={!editorReady}
             expanded={openMenu === "format"}
@@ -488,7 +496,7 @@ export function MarkdownToolbar({
         </div>
         <div className="neubiki-toolbar-compact-menu relative">
           <ToolbarMenuButton
-            label="Estructura"
+            label={t.structure}
             icon={MoreHorizontal}
             disabled={!editorReady}
             expanded={openMenu === "structure"}
@@ -543,7 +551,7 @@ export function MarkdownToolbar({
         {tablePicker}
         <div className="neubiki-toolbar-compact-menu relative">
           <ToolbarMenuButton
-            label="Insertar"
+            label={t.insert}
             icon={MoreHorizontal}
             disabled={!editorReady}
             expanded={openMenu === "insert"}
@@ -599,11 +607,13 @@ function BlockFormatSelect({
   onToggle: (event: MouseEvent<HTMLButtonElement>) => void;
   onRun: (action: MarkdownEditorAction) => void;
 }) {
+  const t = useMarkdownToolbarCopy();
+  const blockFormats = blockFormatsFor(t);
   return (
     <div className="relative shrink-0">
       <button
         className={`toolbar-select ${editorReady ? "" : "opacity-40"}`}
-        aria-label="Formato de bloque"
+        aria-label={t.block}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={!editorReady}
@@ -640,16 +650,17 @@ function ToolbarHistoryActions({
   onMouseDown: (event: MouseEvent<HTMLButtonElement>) => void;
   onRun: (action: MarkdownEditorAction) => void;
 }) {
+  const t = useMarkdownToolbarCopy();
   return (
     <div className="neubiki-editor-history-actions ml-auto flex shrink-0 items-center gap-1">
       <span
         className="inline-grid rounded-md focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-brand-orange"
-        data-tooltip={editorHistoryState.canUndo ? "Deshacer" : "No hay cambios para deshacer"}
+        data-tooltip={editorHistoryState.canUndo ? t.undo : t.noUndo}
         tabIndex={editorReady && editorHistoryState.canUndo ? -1 : 0}
       >
         <button
           className={`toolbar-button ${editorReady && editorHistoryState.canUndo ? "" : "pointer-events-none opacity-40"}`}
-          aria-label="Deshacer"
+          aria-label={t.undo}
           disabled={!editorReady || !editorHistoryState.canUndo}
           onMouseDown={onMouseDown}
           onClick={() => onRun("undo")}
@@ -659,12 +670,12 @@ function ToolbarHistoryActions({
       </span>
       <span
         className="inline-grid rounded-md focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-brand-orange"
-        data-tooltip={editorHistoryState.canRedo ? "Rehacer" : "No hay cambios para rehacer"}
+        data-tooltip={editorHistoryState.canRedo ? t.redo : t.noRedo}
         tabIndex={editorReady && editorHistoryState.canRedo ? -1 : 0}
       >
         <button
           className={`toolbar-button ${editorReady && editorHistoryState.canRedo ? "" : "pointer-events-none opacity-40"}`}
-          aria-label="Rehacer"
+          aria-label={t.redo}
           disabled={!editorReady || !editorHistoryState.canRedo}
           onMouseDown={onMouseDown}
           onClick={() => onRun("redo")}
@@ -687,7 +698,8 @@ function MarkdownSourceToggleButton({
   onMouseDown: (event: MouseEvent<HTMLButtonElement>) => void;
   onToggle?: () => void;
 }) {
-  const label = active ? "Mostrar vista visual" : "Mostrar Markdown puro";
+  const t = useMarkdownToolbarCopy();
+  const label = active ? t.visual : t.source;
   return (
     <button
       className={`toolbar-button ${active ? "toolbar-button-active" : ""}`}
@@ -716,12 +728,13 @@ function HighlightToolbarButton({
   onMouseDown: (event: MouseEvent<HTMLButtonElement>) => void;
   onToggle: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
+  const t = useMarkdownToolbarCopy();
   const color = markdownHighlightColors.find((item) => item.id === activeColor);
   return (
     <button
       className={`toolbar-button ${activeColor || expanded ? "toolbar-button-active" : ""} ${disabled ? "opacity-40" : ""}`}
-      data-tooltip="Resaltado"
-      aria-label="Resaltado"
+      data-tooltip={t.highlight}
+      aria-label={t.highlight}
       aria-haspopup="menu"
       aria-expanded={expanded}
       aria-pressed={Boolean(activeColor)}
@@ -752,9 +765,10 @@ function HighlightMenu({
   onClear: () => void;
   compact?: boolean;
 }) {
+  const t = useMarkdownToolbarCopy();
   const content = (
     <>
-      <div className="grid grid-cols-5 gap-1 p-1" role="group" aria-label="Colores de resaltado">
+      <div className="grid grid-cols-5 gap-1 p-1" role="group" aria-label={t.colors}>
         {markdownHighlightColors.map((color) => (
           <button
             key={color.id}
@@ -762,7 +776,7 @@ function HighlightMenu({
             style={{ backgroundColor: color.background, borderColor: color.border }}
             type="button"
             role="menuitem"
-            aria-label={`Resaltar en ${color.label}`}
+            aria-label={t.highlightColor(t.color[color.id])}
             aria-pressed={activeColor === color.id}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onRun(color.id)}
@@ -777,7 +791,7 @@ function HighlightMenu({
         onClick={onClear}
       >
         <X size={14} />
-        <span className="min-w-0 flex-1 truncate">Quitar resaltado</span>
+        <span className="min-w-0 flex-1 truncate">{t.clearHighlight}</span>
       </button>
     </>
   );
@@ -893,13 +907,14 @@ function useToolbarMenuNavigation(){
       const above = aboveEnd - top;
       menu.style.position = "fixed";
       menu.style.right = "auto";
-      menu.style.maxWidth = `${Math.max(0, right - left)}px`;
-      const placeBelow = menu.scrollHeight <= below || below >= above;
-      menu.style.maxHeight = `${Math.max(0, placeBelow ? below : above)}px`;
+      menu.style.maxWidth = floatingViewportPixels(Math.max(0, right - left));
+      const scale = Number(getComputedStyle(menu).getPropertyValue("--appearance-portal-scale")) || 1;
+      const placeBelow = menu.scrollHeight * scale <= below || below >= above;
+      menu.style.maxHeight = floatingViewportPixels(Math.max(0, placeBelow ? below : above));
       menu.style.overflowY = "auto";
       const bounds = menu.getBoundingClientRect();
-      menu.style.left = `${Math.max(left, Math.min(anchor.left, right - bounds.width))}px`;
-      menu.style.top = `${placeBelow ? belowStart : aboveEnd - bounds.height}px`;
+      menu.style.left = floatingViewportPixels(Math.max(left, Math.min(anchor.left, right - bounds.width)));
+      menu.style.top = floatingViewportPixels(placeBelow ? belowStart : aboveEnd - bounds.height);
     }
     // The panel's layout effect places the parent after the child mounts.
     let frame = requestAnimationFrame(place);
@@ -1034,13 +1049,14 @@ function TablePicker({
   onHover: (size: { rows: number; columns: number }) => void;
   onInsert: (rows: number, columns: number) => void;
 }) {
+  const t = useMarkdownToolbarCopy();
   const navigation=useToolbarMenuNavigation();
   const grid = Array.from({ length: 5 }, (_, rowIndex) =>
     Array.from({ length: 5 }, (_, columnIndex) => ({ row: rowIndex + 1, column: columnIndex + 1 })),
   );
 
   return (
-    <div ref={navigation.ref} role="menu" aria-label="Insertar tabla" onKeyDown={navigation.onKeyDown} onFocus={navigation.onFocus} className="absolute left-0 top-8 z-[90] w-[172px] rounded-md border border-line bg-white p-3 shadow-menu">
+    <div ref={navigation.ref} role="menu" aria-label={t.insertTable} onKeyDown={navigation.onKeyDown} onFocus={navigation.onFocus} className="absolute left-0 top-8 z-[90] w-[172px] rounded-md border border-line bg-white p-3 shadow-menu">
       <div className="grid grid-cols-5 gap-1">
         {grid.flat().map((cell) => {
           const selected = cell.row <= rows && cell.column <= columns;
@@ -1048,7 +1064,7 @@ function TablePicker({
             <button
               key={`${cell.row}-${cell.column}`}
               className={`h-6 w-6 rounded border ${selected ? "border-brand-orange bg-brand-hover" : "border-line bg-white hover:bg-panel"}`}
-              aria-label={`Insertar tabla ${cell.row} x ${cell.column}`}
+              aria-label={t.insertTableSize(cell.row, cell.column)}
               onMouseDown={(event) => event.preventDefault()}
               onMouseEnter={() => onHover({ rows: cell.row, columns: cell.column })}
               onFocus={() => onHover({ rows: cell.row, columns: cell.column })}
@@ -1065,19 +1081,19 @@ function TablePicker({
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => onInsert(rows, columns)}
       >
-        Insertar tabla
+        {t.insertTable}
       </button>
       <button
         className="mt-1 h-7 w-full rounded text-[10px] font-semibold text-ink-secondary hover:bg-panel hover:text-ink-primary"
         onMouseDown={(event) => event.preventDefault()}
         onClick={() => {
-          const customRows = Number(window.prompt("Filas", String(rows)));
-          const customColumns = Number(window.prompt("Columnas", String(columns)));
+          const customRows = Number(window.prompt(t.rows, String(rows)));
+          const customColumns = Number(window.prompt(t.columns, String(columns)));
           if (!customRows || !customColumns) return;
           onInsert(customRows, customColumns);
         }}
       >
-        Personalizar...
+        {t.custom}
       </button>
     </div>
   );

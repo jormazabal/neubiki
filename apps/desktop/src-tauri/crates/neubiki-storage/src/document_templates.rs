@@ -4,10 +4,13 @@ use std::{fs, io::Read};
 mod attachments;
 mod catalogue;
 mod resources;
+mod proton_resources;
+mod proton_capture;
 mod transfer;
 use attachments::Attachment;
 pub use transfer::read_transfer_file;
 
+static CATALOG_WRITE:std::sync::Mutex<()>=std::sync::Mutex::new(());
 const MAX_MARKDOWN: usize = 1024 * 1024;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL: u64 = 16 * 1024 * 1024;
@@ -22,6 +25,8 @@ struct Record {
     description: String,
     markdown: String,
     created_at: String,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    capture_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     resources: Vec<Attachment>,
 }
@@ -176,6 +181,7 @@ fn validate(record: &Record) -> Result<(), String> {
         || record.name.chars().any(char::is_control)
         || record.description.len() > 2000
         || record.markdown.len() > MAX_MARKDOWN
+        || record.capture_digest.as_ref().is_some_and(|digest|digest.len()!=64||!digest.bytes().all(|byte|byte.is_ascii_hexdigit()))
     {
         return Err(
             "Datos de plantilla no válidos o fuera de presupuesto; se conservan sin cambios".into(),
@@ -230,6 +236,7 @@ fn view(record: &Record, revision: &str, full: bool) -> Value {
     }
     if full {
         result["markdown"] = json!(record.markdown);
+        if let Some(digest)=&record.capture_digest {result["captureDigest"]=json!(digest);}
         if !record.resources.is_empty() {
             result["resources"] = json!(record.resources);
             result["schemaVersion"] = json!(record.schema_version);
@@ -253,6 +260,74 @@ fn builtin(id: &str, full: bool) -> Option<Value> {
 }
 
 impl LocalApi {
+    pub(super) fn render_proton_document_template(&self, body: Value) -> Result<Value, String> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Input {
+            account_id: String,
+            root_id: String,
+            template_id: String,
+            revision: String,
+            name: String,
+            local_date: String,
+            values: BTreeMap<String, String>,
+        }
+        let input: Input = serde_json::from_value(body).map_err(|_| "Solicitud de plantilla no válida")?;
+        let current = self.proton_workspace("current", json!({}), &[]);
+        if current.status != 200 || current.body["accountId"] != input.account_id || current.body["root"]["nodeId"] != input.root_id {
+            return Err("La carpeta de Proton cambió. Vuelve a abrir la creación de documentos.".into());
+        }
+        let project_name = current.body["root"]["name"].as_str().ok_or("La carpeta de destino no está disponible")?;
+        let template = self.document_template(&input.template_id)?;
+        if template["revision"] != input.revision {
+            return Err("La plantilla cambió. Vuelve a seleccionarla antes de crear el documento.".into());
+        }
+        let resources: Vec<Attachment> = serde_json::from_value(template.get("resources").cloned().unwrap_or_else(||json!([])))
+            .map_err(|_|"Los adjuntos de la plantilla no son compatibles")?;
+        let name = input.name.trim();
+        if name.is_empty() || name.len() > 240 || !name.to_ascii_lowercase().ends_with(".md")
+            || name.starts_with('.') || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+            || name.chars().any(char::is_control)
+        {
+            return Err("Escribe un nombre Markdown válido para el documento.".into());
+        }
+        let markdown = template["markdown"].as_str().ok_or("La plantilla no contiene texto")?;
+        let keys = variables(markdown)?;
+        if input.values.len() > 32 || input.values.iter().any(|(key, value)| {
+            !keys.contains(key) || value.len() > 16384 || value.contains('\0')
+        }) {
+            return Err("Hay campos desconocidos o valores demasiado largos en la plantilla.".into());
+        }
+        let date_format = time::format_description::parse("[year]-[month]-[day]").map_err(|_| "No se pudo validar la fecha")?;
+        if input.local_date.len() != 10 || time::Date::parse(&input.local_date, &date_format).is_err() {
+            return Err("La fecha del dispositivo no es válida.".into());
+        }
+        let mut values = input.values;
+        for (key, value) in [
+            ("titulo", name[..name.len() - 3].replace('-', " ")),
+            ("fecha", input.local_date), ("proyecto", project_name.to_owned()),
+        ] {
+            if keys.iter().any(|item| item == key) { values.entry(key.into()).or_insert(value); }
+        }
+        if let Some(key) = keys.iter().find(|key| values.get(*key).is_none_or(|value| value.trim().is_empty())) {
+            return Err(format!("Completa el campo {{{{{key}}}}} antes de preparar el documento."));
+        }
+        let mut rendered = String::with_capacity(markdown.len());
+        let mut offset = 0;
+        for (start, end, key) in placeholders(markdown) {
+            rendered.push_str(&markdown[offset..start]);
+            rendered.push_str(&values[&key]);
+            offset = end;
+            if rendered.len() > 2 * MAX_MARKDOWN { return Err("El documento generado supera 2 MiB.".into()); }
+        }
+        rendered.push_str(&markdown[offset..]);
+        if rendered.len() > 2 * MAX_MARKDOWN { return Err("El documento generado supera 2 MiB.".into()); }
+        portable_with_resources(&rendered, false, &resources)?;
+        let rendered = attachments::render_links(&rendered, &resources)?;
+        Ok(json!({"name":name,"markdown":rendered,"templateId":input.template_id,"revision":input.revision,
+            "previewDigest":sha256_hex(rendered.as_bytes()),"resources":resources.iter().map(attachments::summary).collect::<Vec<_>>()}))
+    }
+
     pub(crate) fn document_templates(&self) -> Value {
         let mut templates: Vec<Value> = ["blank", "meeting", "requirements", "decision"]
             .iter()
@@ -317,13 +392,26 @@ impl LocalApi {
         Ok(view(&record, &sha256_hex(&bytes), true))
     }
     pub(crate) fn capture_document_template(&self, body: Value) -> Result<Value, String> {
+        self.capture_document_template_owned(body,None,None)
+    }
+    fn capture_document_template_owned(&self,body:Value,preferred:Option<&str>,capture_digest:Option<&str>)->Result<Value,String>{
+        let _write=CATALOG_WRITE.lock().map_err(|_|"No se puede reservar el catálogo de plantillas")?;
+        if let Some(id)=preferred {
+            if let Some((record,raw,retired))=self.proton_capture_record(id)? {
+                if retired{return Err("La plantilla de esta operación ya fue retirada; no se vuelve a crear.".into());}
+                if record.capture_digest.as_deref()!=capture_digest || body["name"].as_str().map(str::trim)!=Some(record.name.as_str())
+                    || body["description"].as_str().unwrap_or("").trim()!=record.description{return Err("La operación ya corresponde a otra plantilla; consulta su resultado.".into());}
+                return Ok(view(&record,&sha256_hex(&raw),true));
+            }
+        }
         let input:Capture=serde_json::from_value(body).map_err(|_|"La plantilla necesita nombre, descripción y contenido documental; no admite estado adicional")?;
         if !input.resources.is_empty() && !input.reviewed_resources {
             return Err("Revisa los adjuntos y confirma que su contenido puede reutilizarse antes de guardar la plantilla".into());
         }
         let record = Record {
             schema_version: if input.resources.is_empty() { 1 } else { 2 },
-            id: format!("custom-{}", neubiki_core::compact_id("template")),
+            id: preferred.map(str::to_owned).unwrap_or_else(||format!("custom-{}", neubiki_core::compact_id("template"))),
+            capture_digest:capture_digest.map(str::to_owned),
             name: input.name.trim().into(),
             description: input.description.trim().into(),
             markdown: input.markdown,
@@ -497,6 +585,7 @@ impl LocalApi {
         )
     }
     pub(crate) fn retire_document_template(&self, id: &str, body: Value) -> Result<Value, String> {
+        let _write=CATALOG_WRITE.lock().map_err(|_|"No se puede reservar el catálogo de plantillas")?;
         if builtin(id, false).is_some() {
             return Err("Las plantillas iniciales se mantienen disponibles".into());
         }
@@ -545,6 +634,32 @@ mod tests {
             .to_owned();
         (dir, api, id, root)
     }
+    #[test]
+    fn proton_template_preview_uses_selected_remote_root_without_local_project_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let api = LocalApi::new(dir.path().join("state"), "test".into(), "test".into());
+        let workspace = api.pd_private_root().join("proton-workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("selection.json"), json!({
+            "schemaVersion":1,"accountId":"acct","root":{"nodeId":"root","type":"folder","name":"Proyecto Neubiki"}
+        }).to_string()).unwrap();
+        let saved = api.capture_document_template(json!({
+            "name":"Informe", "markdown":"# {{titulo}}\n{{proyecto}} · {{fecha}}\n{{contenido}}"
+        })).unwrap();
+        let body = json!({
+            "accountId":"acct","rootId":"root","templateId":saved["id"],"revision":saved["revision"],
+            "name":"Plan.md","localDate":"2026-11-17","values":{"contenido":"{{titulo}}"}
+        });
+        let preview = api.render_proton_document_template(body.clone()).unwrap();
+        assert_eq!(preview["markdown"], "# Plan\nProyecto Neubiki · 2026-11-17\n{{titulo}}");
+        let mut wrong = body.clone();
+        wrong["rootId"] = json!("another-root");
+        assert!(api.render_proton_document_template(wrong).is_err());
+        let mut stale = body;
+        stale["revision"] = json!("stale");
+        assert!(api.render_proton_document_template(stale).is_err());
+    }
+
     #[test]
     fn creates_two_documents_with_reviewed_fields_without_overwriting() {
         let (_dir, api, project, root) = fixture();

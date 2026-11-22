@@ -55,6 +55,10 @@ mod export_execution;
 mod export_profiles;
 mod export_batch;
 pub use export_batch::{dispatch_export_batch,is_export_batch_work};
+mod proton_export_batch;
+mod proton_backup_schedule;
+pub use proton_backup_schedule::{dispatch_proton_backup, is_proton_backup_work};
+pub use proton_export_batch::{dispatch_proton_export_batch,is_proton_export_batch_work};
 mod document_templates;
 mod project_transfer;
 mod portable_preferences;
@@ -66,6 +70,11 @@ mod storage_usage;
 mod ai_index_store;
 mod ai_data_policy;
 mod proton_ai_text;
+mod proton_ai_error;
+mod proton_research;
+mod proton_replacement_suggestion;
+mod proton_semantic;
+mod proton_ai_history;
 mod security_controls;
 mod ai_privacy;
 pub use ai_privacy::PrivatePermit;
@@ -93,6 +102,7 @@ mod history_groups;
 mod history_views;
 mod history_restore;
 mod meeting_minutes;
+mod recording_summaries;
 mod handwritten_ocr;
 mod ai_change_history;
 mod document_replace;
@@ -117,7 +127,7 @@ mod scheduled_backups;
 mod scheduled_backup_work;
 pub use scheduled_backup_work::is_scheduled_backup_work;
 mod provider_work;
-pub use provider_work::is_provider_work;
+pub use provider_work::{is_proton_ai_review_work, is_provider_work};
 mod external_changes;
 mod favorites;
 mod diagnostics;
@@ -125,7 +135,7 @@ mod runtime_performance;
 pub use project_lifecycle::{dispatch_project_lifecycle,is_project_lifecycle_work};
 mod document_validation;
 pub use document_templates::read_transfer_file;
-pub use project_transfer::{dispatch_project_transfer, is_project_transfer_work, is_portable_history_work};
+pub use project_transfer::{dispatch_project_transfer, is_project_transfer_work, is_portable_history_work, dispatch_proton_package, is_proton_package_work, dispatch_proton_restore, is_proton_restore_work};
 pub use export_execution::{dispatch_export,dispatch_export_content,is_export_request,is_export_content_request,stage_export_content,StagedUserExport};
 pub use ai_interaction::{dispatch_interaction, interaction_project_id};
 #[cfg(target_os = "android")]
@@ -238,9 +248,12 @@ impl LocalApi {
             ("GET",["api","project-templates"]) |
             ("GET",["api","retired-projects"]) |
             ("GET",["api","storage","usage"]) |
+            ("GET",["api","proton","device","storage"]) |
             ("GET",["api","ai","usage","summary"|"ledger"|"budget"]) |
             ("GET",["api","storage","preview-cleanup"]) |
             ("GET",["api","ai","data-policy"]) |
+            ("GET",["api","proton","ai","history"]) |
+            ("GET",["api","proton","ai","history",_]) |
             ("GET",["api","recovery","upgrade" | "upgrades"]) |
             ("GET",["api","recovery","archives",_,"content-review"]) |
             ("POST",["api","projects",_,"sync","mixed-selections","review"]) |
@@ -3220,6 +3233,19 @@ fn normalize_config(config: &mut Value) {
     } else {
         let mut merged = default_config();
         merge(&mut merged, config);
+        let appearance = &config["appearance"];
+        if appearance.get("noteHeadingSizePx").is_none() {
+            if let Some(size) = appearance["noteHeadingSize"].as_f64() {
+                let compact_size = (size.round().clamp(28.0, 48.0) - 6.0).min(30.0);
+                merged["appearance"]["noteHeadingSizePx"] = json!(compact_size as u64);
+            }
+        }
+        // Keep explicit legacy themes distinguishable until the WebView resolves System once.
+        if config["appearance"].get("profile").is_none() && config["appearance"].get("themeMode").is_some() {
+            if let Some(appearance) = merged["appearance"].as_object_mut() {
+                appearance.remove("profile");
+            }
+        }
         *config = merged;
     }
     config["schemaVersion"] = Value::from(3);
@@ -3228,6 +3254,7 @@ fn normalize_config(config: &mut Value) {
     }
     // Explicit null means the document workspace is active. The default already
     // supplies Notes for legacy configurations where the property is absent.
+    normalize_workspace_appearance(&mut config["appearance"]);
     normalize_handwritten_config(&mut config["handwritten"]);
     normalize_ai_config(&mut config["ai"]);
 }
@@ -3558,11 +3585,52 @@ fn normalize_ai_image_generation_config(image_generation: &mut Value) {
     image_generation["outputFormat"] = Value::from(output_format);
 }
 
+fn normalize_workspace_appearance(appearance: &mut Value) {
+    if !appearance.is_object() {
+        *appearance = default_config()["appearance"].clone();
+        return;
+    }
+    if appearance.get("profile").is_none() {
+        return;
+    }
+    for (key, allowed, fallback) in [
+        ("profile", &["classic", "contrast", "night", "reading"][..], "classic"),
+        ("noteFont", &["source-sans-3", "atkinson", "noto-serif", "noto-mono"][..], "source-sans-3"),
+    ] {
+        if !appearance[key].as_str().is_some_and(|value| allowed.contains(&value)) {
+            appearance[key] = json!(fallback);
+        }
+    }
+    let color = match appearance["primaryColor"].as_str() {
+        Some("lime") => "olive",
+        Some("indigo") => "blue",
+        Some("rose") => "wine",
+        Some(value @ ("red" | "orange" | "amber" | "yellow" | "olive" | "green" | "teal"
+            | "cyan" | "blue" | "violet" | "magenta" | "wine")) => value,
+        _ => "orange",
+    };
+    appearance["primaryColor"] = json!(color);
+    for (key, min, max, fallback, step) in [
+        ("zoomPercent", 85.0, 125.0, 100.0, 5.0),
+        ("noteTextSize", 12.0, 28.0, 16.0, 1.0),
+        ("noteHeadingSizePx", 18.0, 30.0, 22.0, 1.0),
+    ] {
+        let value = appearance[key].as_f64().unwrap_or(fallback);
+        appearance[key] = json!(((value / step).round() * step).clamp(min, max) as u64);
+    }
+    let spacing = appearance["noteLineHeight"].as_f64().unwrap_or(1.5);
+    appearance["noteLineHeight"] = json!(if [1.3, 1.5, 1.75, 2.0].contains(&spacing) { spacing } else { 1.5 });
+}
+
 fn default_config() -> Value {
     json!({
         "schemaVersion": 3,
         "layout": { "sidebarWidth": 338, "historyWidth": 320 },
-        "appearance": { "language": "es", "zoomPercent": 100, "markdownExtendedUnderlineEnabled": true, "themeMode": "system", "primaryColor": "orange" },
+        "appearance": {
+            "language": "es", "zoomPercent": 100, "markdownExtendedUnderlineEnabled": true,
+            "themeMode": "system", "profile": "classic", "primaryColor": "orange",
+            "noteFont": "source-sans-3", "noteTextSize": 16, "noteHeadingSizePx": 22, "noteLineHeight": 1.5
+        },
         "diagnostics": { "traceLoggingEnabled": false },
         "handwritten": default_handwritten_config(),
         "ai": default_ai_config(),
@@ -6881,6 +6949,40 @@ mod tests {
             status.body["documents"][0]["currentFingerprint"]["sha256"],
             loaded.body["baseFingerprint"]["sha256"]
         );
+    }
+
+    #[test]
+    fn workspace_appearance_migrates_via_an_explicit_profile_and_merges_without_losing_settings() {
+        let mut legacy = json!({"appearance": {"themeMode":"system","primaryColor":"lime","language":"en","zoomPercent":115}});
+        normalize_config(&mut legacy);
+        assert!(legacy["appearance"].get("profile").is_none());
+        assert_eq!(legacy["appearance"]["themeMode"], "system");
+        assert_eq!(default_config()["appearance"]["profile"], "classic");
+        assert_eq!(default_config()["appearance"]["noteHeadingSizePx"], 22);
+
+        let mut legacy_headings = json!({"appearance": {"profile":"classic","noteHeadingSize":28}});
+        normalize_config(&mut legacy_headings);
+        assert_eq!(legacy_headings["appearance"]["noteHeadingSizePx"], 22);
+        legacy_headings["appearance"]["noteHeadingSizePx"] = json!(28);
+        normalize_config(&mut legacy_headings);
+        assert_eq!(legacy_headings["appearance"]["noteHeadingSizePx"], 28);
+
+        let api = api();
+        api.update_config(json!({"appearance": {"language":"en","markdownExtendedUnderlineEnabled":false}})).unwrap();
+        api.update_config(json!({"appearance": {
+            "profile":"night", "primaryColor":"violet", "zoomPercent":117, "noteFont":"atkinson",
+            "noteTextSize":22, "noteHeadingSizePx":24, "noteLineHeight":1.75
+        }})).unwrap();
+        let stored = api.read_config_checked().unwrap();
+        assert_eq!(stored["appearance"]["profile"], "night");
+        assert_eq!(stored["appearance"]["primaryColor"], "violet");
+        assert_eq!(stored["appearance"]["zoomPercent"], 115);
+        assert_eq!(stored["appearance"]["noteFont"], "atkinson");
+        assert_eq!(stored["appearance"]["noteTextSize"], 22);
+        assert_eq!(stored["appearance"]["noteHeadingSizePx"], 24);
+        assert_eq!(stored["appearance"]["noteLineHeight"], 1.75);
+        assert_eq!(stored["appearance"]["language"], "en");
+        assert_eq!(stored["appearance"]["markdownExtendedUnderlineEnabled"], false);
     }
 
     #[test]

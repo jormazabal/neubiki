@@ -1,6 +1,7 @@
 import { ChevronRight, type LucideIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import { floatingViewportPixels } from "../../lib/theme/floatingViewport";
 
 export type FloatingMenuItem<Action extends string> = {
   label: string;
@@ -15,6 +16,7 @@ type Props<Action extends string> = {
   y?: number;
   anchor?: HTMLButtonElement;
   label?: string;
+  className?: string;
   depth?: number;
   focusOnOpen?: boolean;
   onBack?: () => void;
@@ -23,7 +25,7 @@ type Props<Action extends string> = {
 };
 
 /** Each submenu owns a body-level layer, outside its parent's scroll container. */
-export function FloatingTreeMenu<Action extends string>({items,x=8,y=8,anchor,label,depth=0,focusOnOpen,onBack,onSelect,onClose}:Props<Action>) {
+export function FloatingTreeMenu<Action extends string>({items,x=8,y=8,anchor,label,className="",depth=0,focusOnOpen,onBack,onSelect,onClose}:Props<Action>) {
   const menu=useRef<HTMLDivElement>(null);
   const buttons=useRef<Array<HTMLButtonElement|null>>([]);
   const [expanded,setExpanded]=useState<number|null>(null);
@@ -61,13 +63,13 @@ export function FloatingTreeMenu<Action extends string>({items,x=8,y=8,anchor,la
   }
   const child=expanded===null?undefined:items[expanded];
   const childAnchor=expanded===null?null:buttons.current[expanded];
-  return <div ref={menu} data-document-tree-menu="true" data-floating-tree-menu={depth} role="menu" aria-label={label??"Acciones del archivo"} className="neubiki-tree-menu" style={{left:position.left,top:position.top,width:depth?190:244,zIndex:60+depth}} onKeyDown={keys} onScroll={()=>setExpanded(null)}>
+  return <div ref={menu} data-document-tree-menu="true" data-floating-tree-menu={depth} role="menu" aria-label={label??"Acciones del archivo"} className={`neubiki-tree-menu ${className}`} style={{left:floatingViewportPixels(position.left),top:floatingViewportPixels(position.top),width:depth?190:244,zIndex:60+depth}} onKeyDown={keys} onScroll={()=>setExpanded(null)}>
     {items.map((item,index)=><button key={item.label} ref={element=>{buttons.current[index]=element;}} role="menuitem" aria-haspopup={item.submenu?.length?"menu":undefined} aria-expanded={item.submenu?.length?expanded===index:undefined}
       onMouseEnter={()=>item.submenu?.length?open(index,false):setExpanded(null)}
       onFocus={()=>{if(expanded!==index)setExpanded(null);}}
       onClick={()=>{if(item.submenu?.length)open(index,true);else if(item.action)onSelect(item.action);}}>
       <item.icon size={15}/><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.submenu?.length?<ChevronRight size={13}/>:null}
     </button>)}
-    {child?.submenu?.length&&childAnchor ? createPortal(<FloatingTreeMenu items={child.submenu} anchor={childAnchor} label={child.label} depth={depth+1} focusOnOpen={focusChild} onBack={()=>{setExpanded(null);childAnchor.focus();}} onSelect={onSelect} onClose={onClose}/>,document.body):null}
+    {child?.submenu?.length&&childAnchor ? createPortal(<FloatingTreeMenu items={child.submenu} anchor={childAnchor} label={child.label} className={className} depth={depth+1} focusOnOpen={focusChild} onBack={()=>{setExpanded(null);childAnchor.focus();}} onSelect={onSelect} onClose={onClose}/>,document.body):null}
   </div>;
 }

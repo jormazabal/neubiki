@@ -683,6 +683,7 @@ impl LocalApi {
             }
         }
         budget(&actual)?;
+        self.archive_proton_restore_receipt(&actual)?;
         fs::remove_dir_all(&actual).map_err(|_| {
             "No se pudo retirar toda la preparación privada; no se anuncia como descartada"
         })?;

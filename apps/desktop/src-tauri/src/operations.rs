@@ -26,9 +26,11 @@ fn lane(request: &LocalApiRequest) -> (Lane, u8) {
     }
     if let ("POST", ["api", "proton", "workspace", action]) = (method, parts.as_slice()) {
         return match *action {
-            "draft" | "discard" => (Lane::Mutation, 0),
-            "save" | "reconcile" => (Lane::Transfer, 0),
-            "upload-image" => (Lane::Transfer, 2),
+            "draft" | "discard" | "recovery-remove-copy" | "content-index-configure" | "content-index-clear" => (Lane::Mutation, 0),
+            "save" | "reconcile" | "conflict-resolve" | "replacement-apply" | "batch-edit-prepare" | "note-ai-apply" | "note-page-render" | "favorites-update" => (Lane::Transfer, 0),
+            "meeting-publish" | "meeting-publish-check" => (Lane::Transfer, 2),
+            "profiles-publish" => (Lane::Transfer, 2),
+            "upload-image" | "import-file" | "trash-list" | "trash-restore" | "trash-check" | "office-preview" => (Lane::Transfer, 2),
             _ => (Lane::Query, 0),
         };
     }
@@ -43,6 +45,15 @@ fn lane(request: &LocalApiRequest) -> (Lane, u8) {
         return (Lane::Query,0);
     }
     if neubiki_storage::is_scheduled_backup_work(method,path){return (Lane::Transfer,2);}
+    if matches!((method, parts.as_slice()), ("POST", ["api", "proton", "templates", "shared", _])) {
+        return (Lane::Transfer, 2);
+    }
+    if method=="POST"&&matches!(path,"/api/proton/templates/package"|"/api/proton/templates/source/prepare"|"/api/proton/templates/capture"|"/api/proton/templates/capture/check"){return (Lane::Transfer,2);}
+    if neubiki_storage::is_proton_restore_work(method,path){return (Lane::Transfer,2);}
+    if neubiki_storage::is_proton_package_work(method,path){return (Lane::Transfer,2);}
+    if neubiki_storage::is_proton_backup_work(method,path){return (Lane::Transfer,2);}
+    if neubiki_storage::is_proton_export_batch_work(method,path){return (Lane::Transfer,2);}
+    if neubiki_storage::is_proton_ai_review_work(method, path) { return (Lane::Query, 1); }
     if neubiki_storage::is_export_batch_work(method,path){return (Lane::Transfer,2);}
     if neubiki_storage::is_slow_runtime_work(method,path){return (Lane::Background,1);}
     if let Some((_,kind))=neubiki_storage::asset_work_request(method,path){return (if kind==neubiki_storage::AssetWorkKind::Images{Lane::Index}else{Lane::Transfer},2);}

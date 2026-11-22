@@ -1,5 +1,16 @@
 # Cambios de Neubiki
 
+## 0.8.0 — en preparación
+
+- Papelera y restauración, revisión de conflictos y recuperación privada de borradores, incluso sin conexión.
+- Búsqueda por nombre, contenido y significado, revisión de reemplazos y continuidad con favoritos.
+- Notas manuscritas Neubiki `.nbnote` con apertura y guardado de formatos heredados `.knote`. OCR, dictado y dibujo se revisan antes de aplicarlos.
+- Edición y traducción asistidas de varios Markdown, recibos privados de investigación y publicación revisada de reuniones.
+- Visores, catálogos de plantillas, exportación por lotes, copias programadas y restauración como copia independiente.
+- Interfaz y mensajes de operación en español e inglés. Actualización de Windows y Android desde un canal propio en las compilaciones de distribución.
+
+Consulta el [estado de la 0.8.0](docs/releases/0.8.0.md).
+
 ## 0.7.0 — candidato local
 
 - Editor visual de Proton con barra de formato, menú contextual, selección Markdown, búsqueda, reemplazo, tablas, enlaces, imágenes, diagramas y deshacer y rehacer.

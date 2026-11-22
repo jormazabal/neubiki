@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../lib/api/errors";
 import { getAiConfig } from "../../lib/api/config";
 import { requestProtonText } from "../../lib/api/protonText";
+import { UiLocaleProvider } from "../../lib/i18n/UiLocale";
 import type { AiConfigStatus } from "../../types/domain";
 import type { ProtonToolTarget } from "../protonWorkspace/protonToolTypes";
 import { ProtonTranslation } from "./ProtonTranslation";
@@ -41,6 +43,20 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ProtonTranslation", () => {
+  it("presents language choices and the review in English without changing the request or output", async () => {
+    const apply = vi.fn();
+    request.mockResolvedValue({ kind: "replace_range", text: "**komandoa**" });
+    render(<UiLocaleProvider language="en"><ProtonTranslation available capture={() => target} apply={apply} /></UiLocaleProvider>);
+    fireEvent.change(screen.getByRole("combobox", { name: "Scope" }), { target: { value: "selection" } });
+    const language = screen.getByRole("combobox", { name: "Target language" });
+    expect(screen.getByRole("option", { name: "Basque" })).toHaveValue("Euskera");
+    fireEvent.change(language, { target: { value: "Euskera" } });
+    fireEvent.click(screen.getByRole("button", { name: "Translate" }));
+    expect(await screen.findByRole("article", { name: "Proposed translation" })).toHaveTextContent("**komandoa**");
+    expect(request.mock.calls[0]?.[0]).toMatchObject({ language: "Euskera", markdown: "**the command**" });
+    expect(screen.getByRole("button", { name: "Apply to selection" })).toBeEnabled();
+    expect(apply).not.toHaveBeenCalled();
+  });
   it("sends only the selected Markdown and waits for confirmation before replacing it", async () => {
     const apply = vi.fn(() => true);
     request.mockResolvedValue({ kind: "replace_range", text: "**la orden**" });
@@ -112,12 +128,12 @@ describe("ProtonTranslation", () => {
 
   it("rejects a mismatched edit type and allows retry after a provider failure", async () => {
     const apply = vi.fn();
-    request.mockRejectedValueOnce(new Error("Configura el proveedor de IA."))
+    request.mockRejectedValueOnce(new ApiError(400, "AI", "Provider message", "not-started", "proton-ai-key-required"))
       .mockResolvedValueOnce({ kind: "replace_document", text: "Un resultado inválido" });
     render(<ProtonTranslation available capture={() => target} apply={apply} />);
 
     choose("selection", "Euskera");
-    expect(await screen.findByRole("alert")).toHaveTextContent("Configura el proveedor de IA.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Configura la clave de OpenAI en los ajustes de IA.");
 
     fireEvent.click(screen.getByRole("button", { name: "Traducir" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("no devolvió una traducción válida");

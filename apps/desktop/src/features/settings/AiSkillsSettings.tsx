@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AlertTriangle, Check, FileText, ListFilter, Play, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
 import { getAiSkill, listAiSkills, previewAiSkillSelection, validateAiSkill } from "../../lib/api/skills";
+import { useUiLocale } from "../../lib/i18n/UiLocale";
 import type {
   AiSkillApplication,
   AiSkillDetail,
@@ -11,10 +13,17 @@ import type {
   AiSkillValidationResponse,
   MermaidDiagramType,
 } from "../../types/domain";
+import { aiSkillsSettingsCopy } from "./aiSkillsSettingsCopy";
 
-type DetailTab = "summary" | "modes" | "instructions" | "manifest" | "examples" | "diagnostics";
+const tabs = ["summary", "modes", "instructions", "manifest", "examples", "diagnostics"] as const;
+type DetailTab = typeof tabs[number];
+type Issue = { part: keyof typeof aiSkillsSettingsCopy.es.errors; detail: string };
 
 export function AiSkillsSettings() {
+  const runtimeErrorMessage = useRuntimeErrorMessage();
+  const language = useUiLocale();
+  const copy = aiSkillsSettingsCopy[language];
+  const detailsId = useId();
   const [skills, setSkills] = useState<AiSkillSummary[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<AiSkillDetail | null>(null);
@@ -25,12 +34,16 @@ export function AiSkillsSettings() {
   const [detailTab, setDetailTab] = useState<DetailTab>("summary");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Issue | null>(null);
   const [validation, setValidation] = useState<AiSkillValidationResponse | null>(null);
-  const [previewPrompt, setPreviewPrompt] = useState("Crea una tabla Markdown comparando modo rapido y modo razonado.");
+  const [validating, setValidating] = useState(false);
+  const [previewInput, setPreviewPrompt] = useState<string>();
   const [previewAction, setPreviewAction] = useState("answer");
   const [preview, setPreview] = useState<AiSkillSelectionPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const previewPrompt = previewInput ?? copy.previewExample;
+  const currentSkill = useRef(selectedSkillId);
+  currentSkill.current = selectedSkillId;
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +57,7 @@ export function AiSkillsSettings() {
       })
       .catch((error) => {
         if (cancelled) return;
-        setError(error instanceof Error ? error.message : "No se pudieron cargar las skills de IA.");
+        setError({ part: "catalog", detail: runtimeErrorMessage(error, "") });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -71,7 +84,7 @@ export function AiSkillsSettings() {
       })
       .catch((error) => {
         if (cancelled) return;
-        setError(error instanceof Error ? error.message : "No se pudo abrir la skill seleccionada.");
+        setError({ part: "detail", detail: runtimeErrorMessage(error, "") });
       })
       .finally(() => {
         if (!cancelled) setDetailLoading(false);
@@ -84,8 +97,8 @@ export function AiSkillsSettings() {
   const categories = useMemo(() => {
     const values = new Set<string>();
     skills.forEach((skill) => skill.categories.forEach((item) => values.add(item)));
-    return Array.from(values).sort((first, second) => first.localeCompare(second));
-  }, [skills]);
+    return Array.from(values).sort((first, second) => first.localeCompare(second, language));
+  }, [language, skills]);
 
   const filteredSkills = skills.filter((skill) => {
     if (category !== "all" && !skill.categories.includes(category)) return false;
@@ -97,24 +110,47 @@ export function AiSkillsSettings() {
   });
 
   async function runValidation() {
-    if (!selectedSkillId) return;
-    const result = await validateAiSkill(selectedSkillId);
-    setValidation(result);
-    setSelectedSkill((skill) => skill ? { ...skill, diagnostics: result.diagnostics, status: result.status } : skill);
-    setDetailTab("diagnostics");
+    if (!selectedSkillId || selectedSkill?.id !== selectedSkillId || validating || detailLoading) return;
+    setValidating(true);
+    setError(null);
+    try {
+      const result = await validateAiSkill(selectedSkillId);
+      if (currentSkill.current !== selectedSkillId) return;
+      setValidation(result);
+      setSelectedSkill((skill) => skill?.id === selectedSkillId ? { ...skill, diagnostics: result.diagnostics, status: result.status } : skill);
+      setDetailTab("diagnostics");
+    } catch (cause) {
+      if (currentSkill.current === selectedSkillId) setError({ part: "validation", detail: runtimeErrorMessage(cause, "") });
+    } finally {
+      setValidating(false);
+    }
   }
 
   async function runPreview() {
     setPreviewLoading(true);
+    setError(null);
     try {
       const result = await previewAiSkillSelection({
         prompt: previewPrompt,
         expectedAction: previewAction,
       });
       setPreview(result);
+    } catch (cause) {
+      setError({ part: "preview", detail: runtimeErrorMessage(cause, "") });
     } finally {
       setPreviewLoading(false);
     }
+  }
+
+  function navigateTabs(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const last = tabs.length - 1;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? last
+      : event.key === "ArrowLeft" ? (index + last) % tabs.length
+      : event.key === "ArrowRight" ? (index + 1) % tabs.length : null;
+    if (next === null) return;
+    event.preventDefault();
+    setDetailTab(tabs[next]);
+    document.getElementById(`${detailsId}-${tabs[next]}`)?.focus();
   }
 
   return (
@@ -123,20 +159,23 @@ export function AiSkillsSettings() {
         <div className="border-b border-line bg-white px-4 py-3">
           <div className="flex items-center gap-2">
             <Sparkles size={16} className="text-brand-orange" />
-            <h3 className="text-[14px] font-semibold text-ink-primary">Skills de IA</h3>
+            <h3 className="text-[14px] font-semibold text-ink-primary">{copy.title}</h3>
           </div>
-          <p className="mt-1 text-[11px] leading-4 text-ink-secondary">Capacidades compactas incluidas con Neubiki.</p>
-          <p className="mt-2 rounded bg-panel px-2 py-1 text-[10px] font-semibold text-ink-secondary">Preparado para skills de usuario, sin importacion ni edicion activa.</p>
+          <p className="mt-1 text-[11px] leading-4 text-ink-secondary">{copy.catalogHelp}</p>
         </div>
         <div className="grid grid-cols-2 gap-2 border-b border-line bg-white px-3 py-3">
-          <FilterSelect label="Categoria" value={category} onChange={setCategory} options={[["all", "Todas"], ...categories.map((item) => [item, item] as [string, string])]} />
-          <FilterSelect label="Estado" value={status} onChange={setStatus} options={[["all", "Todos"], ["valid", "Validas"], ["error", "Con errores"], ["draft", "Borrador"]]} />
-          <FilterSelect label="Origen" value={source} onChange={setSource} options={[["all", "Todos"], ["base", "Base"], ["user", "Usuario"], ["imported", "Importada"]]} />
-          <FilterSelect label="Runtime" value={runtime} onChange={setRuntime} options={[["all", "Todas"], ["enabled", "Activas"], ["visible", "Visibles"]]} />
+          <FilterSelect {...copy.filters.category} value={category} onChange={setCategory}
+            options={[["all", copy.filters.category.all], ...categories.map((item) => [item, item] as [string, string])]} />
+          <FilterSelect {...copy.filters.status} value={status} onChange={setStatus}
+            options={(["all", "valid", "error", "draft"] as const).map(id => [id, copy.filters.status[id]])} />
+          <FilterSelect {...copy.filters.source} value={source} onChange={setSource}
+            options={(["all", "base", "user", "imported"] as const).map(id => [id, copy.filters.source[id]])} />
+          <FilterSelect {...copy.filters.runtime} value={runtime} onChange={setRuntime}
+            options={(["all", "enabled", "visible"] as const).map(id => [id, copy.filters.runtime[id]])} />
         </div>
         <div className="max-h-[390px] overflow-y-auto p-2">
           {loading ? (
-            <p className="px-2 py-4 text-[11px] text-ink-secondary">Cargando skills...</p>
+            <p role="status" className="px-2 py-4 text-[11px] text-ink-secondary">{copy.loading}</p>
           ) : filteredSkills.length ? (
             filteredSkills.map((skill) => (
               <button
@@ -154,20 +193,22 @@ export function AiSkillsSettings() {
                 </span>
                 <span className="mt-1 block text-[10px] leading-4 text-ink-secondary">{skill.description}</span>
                 <span className="mt-1 flex items-center justify-between text-[10px] text-ink-secondary">
-                  <span>{skill.modes.length} modos</span>
-                  <span>{skill.runtimeEnabled ? "Runtime activo" : "Visible"}</span>
+                  <span>{copy.modesCount(skill.modes.length)}</span>
+                  <span>{skill.runtimeEnabled ? copy.runtimeActive : copy.visible}</span>
                 </span>
               </button>
             ))
           ) : (
-            <p className="px-2 py-4 text-[11px] text-ink-secondary">No hay skills con estos filtros.</p>
+            <p role="status" className="px-2 py-4 text-[11px] text-ink-secondary">{skills.length ? copy.filteredEmpty : copy.catalogEmpty}</p>
           )}
         </div>
       </aside>
 
       <section className="min-h-0 overflow-hidden rounded-md border border-line bg-white">
         {error ? (
-          <div className="m-4 rounded-md border border-orange-200 bg-brand-hover px-3 py-2 text-[11px] font-semibold text-brand-orange">{error}</div>
+          <div role="alert" className="m-4 rounded-md border border-orange-200 bg-brand-hover px-3 py-2 text-[11px] font-semibold text-brand-orange">
+            {error.detail || copy.errors[error.part]}
+          </div>
         ) : null}
         {selectedSkill ? (
           <div className="flex h-full min-h-0 flex-col">
@@ -177,7 +218,9 @@ export function AiSkillsSettings() {
                   <div className="flex items-center gap-2">
                     <h3 className="truncate text-[16px] font-semibold text-ink-primary">{selectedSkill.name}</h3>
                     <SkillBadge skill={selectedSkill} />
-                    <span className="rounded bg-panel px-1.5 py-0.5 text-[9px] font-semibold uppercase text-ink-secondary">Solo lectura</span>
+                    <span className="rounded bg-panel px-1.5 py-0.5 text-[9px] font-semibold uppercase text-ink-secondary">
+                      {selectedSkill.visibility === "readonly" ? copy.readOnly : copy.editable}
+                    </span>
                   </div>
                   <p className="mt-1 max-w-[760px] text-[11px] leading-5 text-ink-secondary">{selectedSkill.description}</p>
                 </div>
@@ -185,42 +228,41 @@ export function AiSkillsSettings() {
                   type="button"
                   className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-white px-3 text-[11px] font-semibold text-ink-primary hover:bg-brand-hover hover:text-brand-orange"
                   onClick={() => void runValidation()}
+                  disabled={validating || detailLoading || selectedSkill.id !== selectedSkillId}
                 >
                   <RefreshCw size={13} />
-                  Validar skill
+                  {validating ? copy.validating : copy.validate}
                 </button>
               </div>
             </header>
 
-            <nav className="flex h-9 shrink-0 border-b border-line bg-white" aria-label="Detalle de skill">
-              {([
-                ["summary", "Resumen"],
-                ["modes", "Modos"],
-                ["instructions", "Instrucciones"],
-                ["manifest", "Manifest"],
-                ["examples", "Ejemplos"],
-                ["diagnostics", "Diagnostico"],
-              ] as Array<[DetailTab, string]>).map(([id, label]) => (
+            <div className="flex min-h-9 shrink-0 overflow-x-auto border-b border-line bg-white" role="tablist" aria-label={copy.detail}>
+              {tabs.map((id, index) => (
                 <button
                   key={id}
                   type="button"
                   role="tab"
+                  id={`${detailsId}-${id}`}
                   aria-selected={detailTab === id}
+                  aria-controls={`${detailsId}-panel`}
+                  tabIndex={detailTab === id ? 0 : -1}
                   className={[
-                    "relative border-r border-line px-3 text-[11px]",
+                    "relative shrink-0 border-r border-line px-3 text-[11px]",
                     detailTab === id ? "font-semibold text-ink-primary" : "text-ink-secondary hover:bg-panel hover:text-ink-primary",
                   ].join(" ")}
                   onClick={() => setDetailTab(id)}
+                  onKeyDown={event => navigateTabs(event, index)}
                 >
-                  {label}
+                  {copy.tabs[id]}
                   {detailTab === id ? <span className="absolute inset-x-0 bottom-0 h-[2px] bg-brand-orange" /> : null}
                 </button>
               ))}
-            </nav>
+            </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" role="tabpanel" id={`${detailsId}-panel`}
+              tabIndex={0} aria-labelledby={`${detailsId}-${detailTab}`}>
               {detailLoading ? (
-                <p className="text-[11px] text-ink-secondary">Cargando detalle...</p>
+                <p role="status" className="text-[11px] text-ink-secondary">{copy.detailLoading}</p>
               ) : detailTab === "summary" ? (
                 <div className="space-y-4">
                   <SkillSummaryPanel skill={selectedSkill} />
@@ -251,7 +293,7 @@ export function AiSkillsSettings() {
           <div className="grid h-full min-h-[420px] place-items-center text-center text-[11px] text-ink-secondary">
             <div>
               <ListFilter size={28} className="mx-auto mb-2 text-brand-orange" />
-              Selecciona una skill para ver su contenido.
+              {copy.selectSkill}
             </div>
           </div>
         )}
@@ -260,12 +302,14 @@ export function AiSkillsSettings() {
   );
 }
 
-function FilterSelect({ label, value, options, onChange }: { label: string; value: string; options: Array<[string, string]>; onChange: (value: string) => void }) {
+function FilterSelect({ label, ariaLabel, value, options, onChange }: {
+  label: string; ariaLabel: string; value: string; options: Array<[string, string]>; onChange: (value: string) => void;
+}) {
   return (
     <label className="block text-[10px] font-semibold uppercase text-ink-secondary">
       {label}
       <select
-        aria-label={`Filtrar por ${label.toLowerCase()}`}
+        aria-label={ariaLabel}
         className="mt-1 h-8 w-full rounded-md border border-line bg-white px-2 text-[11px] text-ink-primary outline-none focus:border-brand-orange"
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -279,45 +323,47 @@ function FilterSelect({ label, value, options, onChange }: { label: string; valu
 }
 
 function SkillSummaryPanel({ skill }: { skill: AiSkillDetail }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   return (
     <div className="grid gap-3 lg:grid-cols-2">
-      <SummaryGroup title="Identidad" rows={[
+      <SummaryGroup title={copy.identity} rows={[
         ["ID", skill.id],
-        ["Version", skill.version],
-        ["Origen", skill.source === "base" ? "Base incluida con Neubiki" : skill.source],
-        ["Visibilidad", skill.visibility === "readonly" ? "Solo lectura" : "Editable"],
-        ["Runtime", skill.runtimeEnabled ? "Activo" : "Visible, no activo"],
+        [copy.version, skill.version],
+        [copy.filters.source.label, skill.source === "base" ? copy.baseOrigin : copy.filters.source[skill.source]],
+        [copy.visibility, skill.visibility === "readonly" ? copy.readOnly : copy.editable],
+        [copy.filters.runtime.label, skill.runtimeEnabled ? copy.runtimeEnabled : copy.runtimeVisible],
       ]} />
-      <SummaryGroup title="Capacidades" rows={[
-        ["Categorias", skill.categories.join(", ")],
-        ["Capacidades", skill.capabilities.join(", ")],
-        ["Acciones", skill.outputActions.join(", ")],
-        ["Modos", String(skill.modes.length)],
+      <SummaryGroup title={copy.capabilities} rows={[
+        [copy.categories, skill.categories.join(", ")],
+        [copy.capabilities, skill.capabilities.join(", ")],
+        [copy.actions, skill.outputActions.join(", ")],
+        [copy.modes, String(skill.modes.length)],
       ]} />
       {(skill.manifest.orchestratesSkills?.length || skill.manifest.auxiliarySkillCategories?.length || skill.manifest.requiredCapabilities?.length) ? (
-        <SummaryGroup title="Coordinación" rows={[
-          ["Skills auxiliares", skill.manifest.orchestratesSkills?.join(", ") || "No declaradas"],
-          ["Categorías auxiliares", skill.manifest.auxiliarySkillCategories?.join(", ") || "No declaradas"],
-          ["Capacidades requeridas", skill.manifest.requiredCapabilities?.join(", ") || "No declaradas"],
+        <SummaryGroup title={copy.coordination} rows={[
+          [copy.auxiliaries, skill.manifest.orchestratesSkills?.join(", ") ?? ""],
+          [copy.auxiliaryCategories, skill.manifest.auxiliarySkillCategories?.join(", ") ?? ""],
+          [copy.requiredCapabilities, skill.manifest.requiredCapabilities?.join(", ") ?? ""],
         ]} />
       ) : null}
-      <section className="rounded-md border border-line bg-panel/40 px-3 py-3 lg:col-span-2">
+      {skill.source === "base" && <section className="rounded-md border border-line bg-panel/40 px-3 py-3 lg:col-span-2">
         <div className="flex items-start gap-2">
           <ShieldCheck size={15} className="mt-0.5 shrink-0 text-brand-orange" />
           <p className="text-[11px] leading-5 text-ink-secondary">
-            Skill base incluida con Neubiki. Define reglas e instrucciones, pero no concede permisos ni ejecuta acciones por si misma.
+            {copy.basePolicy}
           </p>
         </div>
-      </section>
+      </section>}
     </div>
   );
 }
 
 function ModesPanel({ modes, mermaidCatalog }: { modes: AiSkillMode[]; mermaidCatalog: MermaidDiagramType[] }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   const families = useMemo(() => groupMermaidByFamily(mermaidCatalog), [mermaidCatalog]);
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 lg:grid-cols-2">
+      {modes.length ? <div className="grid gap-3 lg:grid-cols-2">
         {modes.map((mode) => (
           <section key={mode.id} className="rounded-md border border-line bg-white">
             <div className="border-b border-line px-3 py-2">
@@ -328,18 +374,18 @@ function ModesPanel({ modes, mermaidCatalog }: { modes: AiSkillMode[]; mermaidCa
               <p className="mt-1 text-[10px] leading-4 text-ink-secondary">{mode.description}</p>
             </div>
             <div className="space-y-2 px-3 py-3 text-[10px] leading-4 text-ink-secondary">
-              <ModeList title="Cuando usar" values={mode.whenToUse} />
-              <ModeList title="Evitar" values={mode.whenNotToUse} />
-              <p><span className="font-semibold text-ink-primary">Acciones:</span> {mode.supportedActions.join(", ")}</p>
-              <p><span className="font-semibold text-ink-primary">Validadores:</span> {mode.validators.join(", ")}</p>
-              <p><span className="font-semibold text-ink-primary">Capacidades:</span> {mode.requiresCapabilities.join(", ") || "No declaradas"}</p>
+              <ModeList title={copy.whenToUse} values={mode.whenToUse} />
+              <ModeList title={copy.whenNotToUse} values={mode.whenNotToUse} />
+              <p><span className="font-semibold text-ink-primary">{copy.actions}</span> · {mode.supportedActions.join(", ") || copy.unspecified}</p>
+              <p><span className="font-semibold text-ink-primary">{copy.validators}</span> · {mode.validators.join(", ") || copy.unspecified}</p>
+              <p><span className="font-semibold text-ink-primary">{copy.capabilities}</span> · {mode.requiresCapabilities.join(", ") || copy.unspecified}</p>
             </div>
           </section>
         ))}
-      </div>
+      </div> : <p className="text-[11px] text-ink-secondary">{copy.noModes}</p>}
       {mermaidCatalog.length ? (
         <section className="rounded-md border border-line bg-panel/30 px-3 py-3">
-          <h4 className="text-[11px] font-semibold text-ink-primary">Tipos Mermaid soportados</h4>
+          <h4 className="text-[11px] font-semibold text-ink-primary">{copy.supportedMermaid}</h4>
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
             {Object.entries(families).map(([family, types]) => (
               <div key={family} className="rounded-md border border-line bg-white px-3 py-2">
@@ -377,30 +423,28 @@ function SelectionPreviewPanel({
   onActionChange: (value: string) => void;
   onRun: () => void;
 }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   return (
     <section className="rounded-md border border-line bg-white">
       <div className="border-b border-line px-3 py-2">
-        <h4 className="text-[11px] font-semibold text-ink-primary">Probar seleccion</h4>
-        <p className="mt-1 text-[10px] text-ink-secondary">Previsualiza candidatas, decision Rust y diagnostico sin ejecutar una respuesta IA.</p>
+        <h4 className="text-[11px] font-semibold text-ink-primary">{copy.previewTitle}</h4>
+        <p className="mt-1 text-[10px] text-ink-secondary">{copy.previewHelp}</p>
       </div>
       <div className="space-y-2 px-3 py-3">
         <textarea
           className="min-h-[72px] w-full rounded-md border border-line bg-white px-2 py-2 text-[11px] leading-5 text-ink-primary outline-none focus:border-brand-orange"
           value={prompt}
           onChange={(event) => onPromptChange(event.target.value)}
-          aria-label="Prompt para probar seleccion"
+          aria-label={copy.previewInput}
         />
         <div className="flex flex-wrap items-center gap-2">
           <select
             className="h-8 rounded-md border border-line bg-white px-2 text-[11px] text-ink-primary outline-none focus:border-brand-orange"
             value={action}
             onChange={(event) => onActionChange(event.target.value)}
-            aria-label="Accion esperada"
+            aria-label={copy.expectedAction}
           >
-            <option value="answer">answer</option>
-            <option value="edit_document">edit_document</option>
-            <option value="insert_diagram">insert_diagram</option>
-            <option value="create_document">create_document</option>
+            {Object.entries(copy.previewActions).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
           <button
             type="button"
@@ -409,14 +453,15 @@ function SelectionPreviewPanel({
             disabled={loading || !prompt.trim()}
           >
             <Play size={13} />
-            {loading ? "Previsualizando..." : "Previsualizar seleccion"}
+            {loading ? copy.previewing : copy.runPreview}
           </button>
         </div>
         {preview ? (
           <div className="grid gap-2 pt-2 text-[10px] leading-4 text-ink-secondary lg:grid-cols-3">
-            <PreviewColumn title="Candidatas" values={preview.candidateSkills.map((skill) => skill.name)} />
-            <PreviewColumn title="Aplicadas" values={preview.applications.map(applicationLabel)} />
-            <PreviewColumn title="Diagnostico" values={preview.diagnostics.slice(0, 4).map((diagnostic) => `${diagnostic.title}${diagnostic.modeId ? ` · ${diagnostic.modeId}` : ""}`)} />
+            <PreviewColumn title={copy.candidates} values={preview.candidateSkills.map((skill) => skill.name)} />
+            <PreviewColumn title={copy.applied} values={preview.applications.map(applicationLabel)} />
+            <PreviewColumn title={copy.diagnostics} values={preview.diagnostics.slice(0, 4).map(diagnostic =>
+              [diagnostic.title ?? diagnostic.message, diagnostic.modeId].filter(Boolean).join(" · "))} />
           </div>
         ) : null}
       </div>
@@ -425,24 +470,27 @@ function SelectionPreviewPanel({
 }
 
 function PreviewColumn({ title, values }: { title: string; values: string[] }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   return (
     <div className="rounded-md border border-line bg-panel/30 px-2 py-2">
       <h5 className="font-semibold text-ink-primary">{title}</h5>
-      {values.length ? values.map((value) => <p key={value} className="mt-1">{value}</p>) : <p className="mt-1">Sin datos</p>}
+      {values.length ? values.map((value) => <p key={value} className="mt-1">{value}</p>) : <p className="mt-1">{copy.noData}</p>}
     </div>
   );
 }
 
 function ModeList({ title, values }: { title: string; values: string[] }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   return (
     <div>
       <p className="font-semibold text-ink-primary">{title}</p>
-      {values.length ? values.map((value) => <p key={value}>- {value}</p>) : <p>No declarado</p>}
+      {values.length ? values.map((value) => <p key={value}>- {value}</p>) : <p>{copy.unspecified}</p>}
     </div>
   );
 }
 
 function SummaryGroup({ title, rows }: { title: string; rows: Array<[string, string]> }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   return (
     <section className="rounded-md border border-line bg-white">
       <h4 className="border-b border-line px-3 py-2 text-[11px] font-semibold text-ink-primary">{title}</h4>
@@ -450,7 +498,7 @@ function SummaryGroup({ title, rows }: { title: string; rows: Array<[string, str
         {rows.map(([label, value]) => (
           <div key={label} className="grid grid-cols-[130px_minmax(0,1fr)] gap-3 px-3 py-2 text-[11px]">
             <dt className="font-semibold text-ink-secondary">{label}</dt>
-            <dd className="min-w-0 break-words text-ink-primary">{value || "No declarado"}</dd>
+            <dd className="min-w-0 break-words text-ink-primary">{value || copy.unspecified}</dd>
           </div>
         ))}
       </dl>
@@ -473,8 +521,9 @@ function ReadonlyCodeBlock({ label, value }: { label: string; value: string }) {
 }
 
 function SkillExamples({ examples }: { examples: AiSkillDetail["examples"] }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   if (!examples.length) {
-    return <p className="text-[11px] text-ink-secondary">Esta skill base no incluye ejemplos visibles.</p>;
+    return <p className="text-[11px] text-ink-secondary">{copy.noExamples}</p>;
   }
   return (
     <div className="space-y-3">
@@ -486,8 +535,9 @@ function SkillExamples({ examples }: { examples: AiSkillDetail["examples"] }) {
 }
 
 function DiagnosticsPanel({ diagnostics }: { diagnostics: AiSkillDiagnostic[] }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   if (!diagnostics.length) {
-    return <p className="text-[11px] text-ink-secondary">Sin diagnostico disponible.</p>;
+    return <p className="text-[11px] text-ink-secondary">{copy.noDiagnostics}</p>;
   }
   return (
     <div className="space-y-2">
@@ -503,12 +553,12 @@ function DiagnosticsPanel({ diagnostics }: { diagnostics: AiSkillDiagnostic[] })
           >
             <div className="flex items-center gap-2 font-semibold">
               {tone === "error" ? <AlertTriangle size={13} /> : <Check size={13} />}
-              {diagnostic.title}
+              {diagnostic.title ?? diagnostic.message}
             </div>
             <p className="mt-1 font-mono text-[10px]">
               {diagnostic.skillId}{diagnostic.modeId ? ` / ${diagnostic.modeId}` : ""}{diagnostic.phase ? ` · ${diagnostic.phase}` : ""}
             </p>
-            {diagnostic.validatorId ? <p className="mt-1">Validador: {diagnostic.validatorId}</p> : null}
+            {diagnostic.validatorId ? <p className="mt-1">{copy.validator} · {diagnostic.validatorId}</p> : null}
             {(diagnostic.notes ?? []).map((note) => (
               <p key={note} className="mt-1">{note}</p>
             ))}
@@ -520,10 +570,11 @@ function DiagnosticsPanel({ diagnostics }: { diagnostics: AiSkillDiagnostic[] })
 }
 
 function SkillBadge({ skill }: { skill: Pick<AiSkillSummary, "source" | "status" | "runtimeEnabled"> }) {
+  const copy = aiSkillsSettingsCopy[useUiLocale()];
   const statusClass = skill.status === "error" ? "bg-brand-hover text-brand-orange" : skill.runtimeEnabled ? "bg-emerald-50 text-emerald-700" : "bg-panel text-ink-secondary";
   return (
     <span className={["shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase", statusClass].join(" ")}>
-      {skill.source === "base" ? "Base" : skill.source}
+      {copy.filters.source[skill.source]}
     </span>
   );
 }

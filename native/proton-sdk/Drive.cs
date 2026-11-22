@@ -38,7 +38,7 @@ public static partial class Bridge {
         var c=api.ClientConfiguration;
         var http = api.CreateHttpClientFactory();
         var account = new ProtonAccountClient(http,c.CacheRepository,api.SessionSecretCache,c.Telemetry);
-        var flags = op is "drive.writeRevision" or "diagnostics.revisionProbe" or "diagnostics.dropRevisionReply"
+        var flags = op is "drive.writeRevision" or "drive.workspaceFavoritesWrite" or "drive.workspaceProfilesWrite" or "diagnostics.revisionProbe" or "diagnostics.dropRevisionReply"
             ? new RegularRevisionUploads(c.FeatureFlagProvider)
             : c.FeatureFlagProvider;
         var drive = new ProtonDriveClient(http,account,c.CacheRepository,flags,c.Telemetry);
@@ -47,22 +47,102 @@ public static partial class Bridge {
         switch(op){
             case "drive.root":result=NodeDto(await drive.GetMyFilesFolderAsync(ct));break;
             case "drive.workspaceFolder":
-                result = NodeDto(await WorkspaceFolder(drive, NodeUid.Parse(Text(p, "rootId")), null, ct));
+                result = NodeDto(await WorkspaceFolder(drive, NodeUid.Parse(Text(p, "rootId")),
+                    p["scopeRootId"]?.GetValue<string>() is { } scopeId ? NodeUid.Parse(scopeId) : null, ct));
                 break;
             case "drive.workspaceList":
                 result = await WorkspaceList(drive, p, ct);
                 break;
-            case "drive.workspaceRead":
-                result = await ReadFileJson(drive, await WorkspaceFile(drive, p, ct), ct);
+            case "drive.workspaceFavoritesRead":
+                result = await WorkspaceFavoritesRead(drive, p, ct);
                 break;
+            case "drive.workspaceFavoritesWrite":
+                result = await WorkspaceFavoritesWrite(drive, p, ct);
+                break;
+            case "drive.workspaceProfilesRead":
+                result = await WorkspaceProfilesRead(drive, p, ct);
+                break;
+            case "drive.workspaceProfilesWrite":
+                result = await WorkspaceProfilesWrite(drive, p, ct);
+                break;
+            case "drive.workspaceRead":
+            {
+                var ancestors = new List<NodeUid>();
+                var workspaceFile = await WorkspaceFile(drive, p, ct, ancestors);
+                var extension = Path.GetExtension(VerifiedName(workspaceFile)).ToLowerInvariant();
+                var search = p["search"]?.GetValue<bool>() == true;
+                var package = p["package"]?.GetValue<bool>() == true;
+                var office = extension is ".docx" or ".xlsx";
+                var expectedRevision = p["expectedRevisionId"]?.GetValue<string>();
+                if (expectedRevision != null && workspaceFile.ActiveRevision.Uid.ToString() != expectedRevision)
+                    throw new Failure("stale-node");
+                var officeRevision = p["officeRevisionId"]?.GetValue<string>();
+                if (officeRevision != null && (!office || workspaceFile.ActiveRevision.Uid.ToString() != officeRevision))
+                    throw new Failure("stale-node");
+                var readLimit = package ? 8 * 1024 * 1024 : search
+                    ? 2 * 1024 * 1024
+                    : extension switch
+                    {
+                        ".pdf" => 12 * 1024 * 1024,
+                        ".mp3" or ".wav" or ".ogg" or ".flac" or ".m4a" or ".mp4" or ".webm" => 16 * 1024 * 1024,
+                        ".knote" or ".nbnote" or ".docx" or ".xlsx" => 8 * 1024 * 1024,
+                        ".txt" or ".csv" or ".tsv" or ".log" or ".json" => 1024 * 1024,
+                        _ => MaxContent,
+                    };
+                result = office && !search && !package && officeRevision == null
+                    ? new JsonObject
+                    {
+                        ["node"] = NodeDto(workspaceFile),
+                        ["revisionId"] = workspaceFile.ActiveRevision.Uid.ToString(),
+                        ["contentBase64"] = "",
+                    }
+                    : await ReadFileJson(drive, workspaceFile, ct, readLimit);
+                ancestors.Reverse();
+                result["ancestorIds"] = new JsonArray(ancestors.Select(uid => (JsonNode?)JsonValue.Create(uid.ToString())).ToArray());
+                break;
+            }
             case "drive.workspaceStat":
                 result = NodeDto(await WorkspaceMarkdown(drive, p, ct));
                 break;
+            case "drive.workspaceFileStat":
+            {
+                var ancestors = new List<NodeUid>();
+                result = NodeDto(await WorkspaceFile(drive, p, ct, ancestors));
+                ancestors.Reverse();
+                result["ancestorIds"] = new JsonArray(ancestors.Select(uid => (JsonNode?)JsonValue.Create(uid.ToString())).ToArray());
+                break;
+            }
+            case "drive.workspaceFolderStat":
+            {
+                var ancestors = new List<NodeUid>();
+                var folder = await Within(drive, NodeUid.Parse(Text(p, "nodeId")),
+                    NodeUid.Parse(Text(p, "rootId")), ct, traceAncestors: ancestors);
+                if (folder is not FolderNode || ReservedWorkspaceMetadataName(VerifiedName(folder)))
+                    throw new Failure("not-folder");
+                result = NodeDto(folder);
+                ancestors.Reverse();
+                result["ancestorIds"] = new JsonArray(ancestors.Select(uid => (JsonNode?)JsonValue.Create(uid.ToString())).ToArray());
+                break;
+            }
             case "drive.workspaceAsset":
                 result = await WorkspaceAsset(drive, p, ct);
                 break;
             case "drive.workspaceUploadImage":
                 result = await WorkspaceUploadImage(drive, p, ct);
+                break;
+            case "drive.workspaceTreeEdit":
+                try { result = await WorkspaceTreeEdit(drive, p, ct); }
+                catch (NodeWithSameNameExistsException) { throw new Failure("name-conflict"); }
+                catch (NodeOutOfSyncException) { throw new Failure("stale-node"); }
+                break;
+            case "drive.workspaceTrashList":
+                result = await WorkspaceTrashList(drive, p, ct);
+                break;
+            case "drive.workspaceTrashRestore":
+                result = await WorkspaceTrashRestore(drive, p, ct);
+                break;
+            case "drive.workspaceTrashCheck":
+                result = await WorkspaceTrashCheck(drive, p, ct);
                 break;
             case "drive.writeRevision":
                 result = await WriteWorkspaceRevision(drive, p, ct);

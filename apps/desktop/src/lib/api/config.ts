@@ -619,6 +619,8 @@ function normalizeAiStatus(ai: AiConfigStatus | undefined): AiConfigStatus {
     openaiKeyPreview: typeof ai?.openaiKeyPreview === "string" && ai.openaiKeyPreview.trim()
       ? ai.openaiKeyPreview
       : null,
+    ...(ai?.credentialStorageError ? { credentialStorageError: ai.credentialStorageError } : {}),
+    ...(ai?.credentialProtection ? { credentialProtection: ai.credentialProtection } : {}),
   };
 }
 

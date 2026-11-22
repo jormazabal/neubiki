@@ -36,6 +36,18 @@ it("retains uncertainty after a transport rejection but preserves explicit admis
  await expect(runLocalOperation(()=>Promise.reject("operation-queue-full"),{native:true,label:"Operación"})).rejects.toBeInstanceOf(ApiError);expect(getLocalOperations().slice(-1)[0]).toMatchObject({phase:"failed",unconfirmed:false});
 });
 
+it("checks a structured unknown outcome even when the response has a client status", async () => {
+  const execute = vi.fn().mockRejectedValue(new ApiError(409, "Conflict", undefined, "unknown",
+    "runtime-transfer-failed", "transfer-receipt"));
+  await expect(runLocalOperation(execute, { native: true, label: "Transferencia" })).rejects.toMatchObject({
+    status: 409, operationOutcome: "unknown", code: "runtime-transfer-failed", operationId: "transfer-receipt",
+  });
+  const operations = getLocalOperations();
+  expect(operations[operations.length - 1]).toMatchObject({ phase: "unknown", unconfirmed: true });
+  expect(execute).toHaveBeenCalledOnce();
+  expect(invoke).not.toHaveBeenCalled();
+});
+
 it("keeps task diagnostics bounded and excludes labels, request content and filesystem locations",async()=>{
  await runLocalOperation(async()=>true,{native:false,label:"PRIVATE document C:/private/content prompt token"});const report=localOperationDiagnostic();expect(report).not.toContain("PRIVATE");expect(report).not.toContain("C:/private");const parsed=JSON.parse(report);expect(parsed.includesPrivateContent).toBe(false);expect(parsed.operations.length).toBeLessThanOrEqual(50);expect(Object.keys(parsed.operations.slice(-1)[0])).toEqual(["id","phase","startedAt","resultNeedsReview","stage","cancelRequested","previousSession"]);
 });

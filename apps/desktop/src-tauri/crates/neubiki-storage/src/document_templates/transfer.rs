@@ -34,6 +34,7 @@ pub(super) fn decode(content: &str) -> Result<Portable, String> {
         );
     }
     validate(&Record {
+        capture_digest:None,
         schema_version: data.schema_version,
         resources: data.resources.clone(),
         id: "custom-import-review".into(),

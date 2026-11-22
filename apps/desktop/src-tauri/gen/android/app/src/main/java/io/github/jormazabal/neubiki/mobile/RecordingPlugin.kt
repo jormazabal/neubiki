@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import app.tauri.annotation.Command
-import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
@@ -13,19 +12,23 @@ import app.tauri.plugin.Plugin
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
 
-@InvokeArg
-class RecordingArgs { lateinit var action: String; lateinit var payload: JSObject; lateinit var root: String }
-
 @TauriPlugin
 class RecordingPlugin(private val activity: Activity): Plugin(activity) {
     @Command
     fun control(invoke: Invoke) {
-        val args = invoke.parseArgs(RecordingArgs::class.java)
-        activity.getSharedPreferences("recording-runtime",0).edit().putString("root",args.root).apply()
-        if(args.action=="preview-stop" && !RecordingBridge.command("snapshot").optBoolean("preview")) {
+        val args = invoke.getArgs()
+        val action = args.optString("action")
+        val root = args.optString("root")
+        val payload = args.optJSONObject("payload")
+        if (action.isBlank() || root.isBlank() || payload == null) {
+            invoke.reject("Solicitud de grabación no válida.")
+            return
+        }
+        activity.getSharedPreferences("recording-runtime",0).edit().putString("root",root).apply()
+        if(action=="preview-stop" && !RecordingBridge.command("snapshot").optBoolean("preview")) {
             invoke.resolve(JSObject(RecordingBridge.command("snapshot").toString()));return
         }
-        if (args.action == "start" || args.action == "resume" || args.action == "preview") {
+        if (action == "start" || action == "resume" || action == "preview") {
             val permissions=mutableListOf(Manifest.permission.RECORD_AUDIO)
             if(android.os.Build.VERSION.SDK_INT>=33)permissions.add(Manifest.permission.POST_NOTIFICATIONS)
             if (permissions.any{ContextCompat.checkSelfPermission(activity,it)!=PackageManager.PERMISSION_GRANTED}) {
@@ -34,13 +37,13 @@ class RecordingPlugin(private val activity: Activity): Plugin(activity) {
                 return
             }
         }
-        if (args.action == "queue") {
-            try { val value=RecordingBridge.command(args.action,args.payload);RecordingWorker.enqueue(activity);invoke.resolve(JSObject(value.toString())) } catch (e:Exception) {invoke.reject(e.message ?: "Error de grabación")}
+        if (action == "queue") {
+            try { val value=RecordingBridge.command(action,payload);RecordingWorker.enqueue(activity);invoke.resolve(JSObject(value.toString())) } catch (e:Exception) {invoke.reject(e.message ?: "Error de grabación")}
             return
         }
         val requestId=java.util.UUID.randomUUID().toString()
         MeetingRecordingService.replies[requestId]=invoke
-        val intent=Intent(activity,MeetingRecordingService::class.java).putExtra("action",args.action).putExtra("payload",args.payload.toString()).putExtra("requestId",requestId)
+        val intent=Intent(activity,MeetingRecordingService::class.java).putExtra("action",action).putExtra("payload",payload.toString()).putExtra("requestId",requestId)
         try { ContextCompat.startForegroundService(activity,intent) } catch (e:Exception) { MeetingRecordingService.replies.remove(requestId);invoke.reject(e.message ?: "No se pudo iniciar el servicio de micrófono") }
     }
 }

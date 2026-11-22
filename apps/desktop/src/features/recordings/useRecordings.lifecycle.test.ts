@@ -36,13 +36,13 @@ it("reuses an outstanding snapshot across rapid hide/show without overlapping re
 it("does not hide a failed command when the next snapshot succeeds",async()=>{
   const {result}=renderHook(()=>useRecordings());await act(async()=>{});
   vi.mocked(recordingRequest).mockRejectedValueOnce(new Error("No se pudo guardar"));
-  await act(async()=>{await result.current.command("settings",{});});expect(result.current.error).toContain("No se pudo guardar");
-  await act(async()=>vi.advanceTimersByTimeAsync(500));expect(result.current.error).toContain("No se pudo guardar");
+  await act(async()=>{await result.current.command("settings",{});});expect(result.current.error).toContain("No se pudo completar la acción. Comprueba el estado de la grabación.");
+  await act(async()=>vi.advanceTimersByTimeAsync(500));expect(result.current.error).toContain("No se pudo completar la acción. Comprueba el estado de la grabación.");
   await act(async()=>{await result.current.command("settings",{});});expect(result.current.error).toBeNull();
 });
 it("clears a read failure after a confirmed snapshot without inventing a command result",async()=>{
   vi.mocked(recordingRequest).mockRejectedValueOnce(new Error("Sin lectura"));
-  const {result}=renderHook(()=>useRecordings());await act(async()=>{});expect(result.current.error).toContain("Sin lectura");
+  const {result}=renderHook(()=>useRecordings());await act(async()=>{});expect(result.current.error).toContain("No se pudo consultar la grabación.");
   await act(async()=>vi.advanceTimersByTimeAsync(500));expect(result.current.error).toBeNull();expect(result.current.snapshot?.revision).toBe(1);
 });
 it("retains a newer command revision when an older read arrives afterwards",async()=>{

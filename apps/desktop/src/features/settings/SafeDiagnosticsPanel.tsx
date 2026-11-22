@@ -1,10 +1,11 @@
+import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import {useEffect,useRef,useState} from "react";
 import {Copy,ShieldCheck} from "lucide-react";
 import {getSafeDiagnostics} from "../../lib/api/diagnostics";
 import {safeDiagnosticJson} from "../../lib/runtime/diagnostics";
-import {getApiErrorMessage} from "../../lib/api/client";
 
 export function SafeDiagnosticsPanel({english=false,copyText}:{english?:boolean;copyText:(text:string)=>Promise<boolean>}) {
+  const runtimeErrorMessage = useRuntimeErrorMessage();
   const [report,setReport]=useState("");const [count,setCount]=useState(0);const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");const [notice,setNotice]=useState("");
   const mounted=useRef(true);const flight=useRef(false);
@@ -12,7 +13,7 @@ export function SafeDiagnosticsPanel({english=false,copyText}:{english?:boolean;
   async function prepare(){
     if(flight.current)return;flight.current=true;setBusy(true);setError("");setNotice("");
     try{const result=await getSafeDiagnostics();const text=safeDiagnosticJson(result);if(mounted.current){setReport(text);setCount(result.events.length);}}
-    catch(failure){if(mounted.current)setError(getApiErrorMessage(failure,english?"The report could not be prepared. Existing data is preserved.":"No se pudo preparar el informe. Se conserva el diagnóstico anterior."));}
+    catch(failure){if(mounted.current)setError(runtimeErrorMessage(failure,english?"The report could not be prepared. Existing data is preserved.":"No se pudo preparar el informe. Se conserva el diagnóstico anterior."));}
     finally{if(mounted.current){flight.current=false;setBusy(false);}}
   }
   async function copy(){

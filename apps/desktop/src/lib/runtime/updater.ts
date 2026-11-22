@@ -1,8 +1,13 @@
 import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";
+import { ApiError } from "../api/errors";
 import { isMobileDeviceRuntime, isTauriRuntime } from "./platform";
 
 const androidUpdateManifestUrl = () =>
   (import.meta.env.VITE_NEUBIKI_ANDROID_UPDATE_MANIFEST_URL as string | undefined)?.trim();
+
+function updateRequestError(code: string, detail: string) {
+  return new ApiError(409, "Update unavailable", detail, "not-started", code);
+}
 
 export type AvailableUpdate = {
   currentVersion: string;
@@ -110,7 +115,7 @@ export function getUpdaterStatus(): UpdaterStatus {
   }
 
   if (isMobileDeviceRuntime()) {
-    return getAndroidUpdaterBridge()
+    return getAndroidUpdaterBridge() && androidUpdateManifestUrl()
       ? { supported: true }
       : { supported: false, reason: "Este instalador de Neubiki no tiene un canal de actualización Android." };
   }
@@ -120,7 +125,12 @@ export function getUpdaterStatus(): UpdaterStatus {
 
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   const status = getUpdaterStatus();
-  if (!status.supported) return { supported: false, update: null };
+  if (!status.supported) {
+    pendingDesktopUpdate = null;
+    downloadedDesktopUpdate = null;
+    pendingAndroidUpdate = null;
+    return { supported: false, update: null };
+  }
 
   if (isMobileDeviceRuntime()) {
     pendingDesktopUpdate=null;downloadedDesktopUpdate=null;
@@ -145,7 +155,7 @@ export async function installUpdate(onProgress?: (progress: UpdateDownloadProgre
   }
 
   if (!pendingDesktopUpdate) {
-    throw new Error("No hay ninguna actualización preparada para instalar.");
+    throw updateRequestError("runtime-update-not-prepared", "No hay ninguna actualización preparada para instalar.");
   }
 
   let downloadedBytes = 0;
@@ -199,14 +209,14 @@ async function fetchAndroidManifest(bridge: AndroidUpdaterBridge): Promise<Andro
   const rawResponse = bridge.fetchUpdateManifest(payload);
   const nativeResponse = parseAndroidManifestFetchResponse(rawResponse);
   if (!nativeResponse.ok || !nativeResponse.body) {
-    throw new Error(nativeResponse.message ?? "No se pudo leer el manifiesto Android.");
+    throw updateRequestError("runtime-update-manifest-unavailable", nativeResponse.message ?? "No se pudo leer el manifiesto Android.");
   }
 
   let parsedManifest: unknown;
   try {
     parsedManifest = JSON.parse(nativeResponse.body);
   } catch {
-    throw new Error("El manifiesto Android no es JSON válido.");
+    throw updateRequestError("runtime-update-manifest-invalid", "El manifiesto Android no es JSON válido.");
   }
 
   return parseAndroidManifest(parsedManifest);
@@ -269,10 +279,10 @@ function parseAndroidArtifact(value: unknown): AndroidUpdateArtifact {
 
 function validateAndroidManifest(manifest: AndroidUpdateManifest, packageInfo: AndroidPackageInfo) {
   if (manifest.applicationId !== packageInfo.applicationId) {
-    throw new Error("El manifiesto Android no corresponde con esta aplicación.");
+    throw updateRequestError("runtime-update-manifest-invalid", "El manifiesto Android no corresponde con esta aplicación.");
   }
   if (manifest.minSupportedVersionCode && packageInfo.versionCode < manifest.minSupportedVersionCode) {
-    throw new Error("Esta instalación es demasiado antigua para actualizarse automáticamente. Instala manualmente la última APK.");
+    throw updateRequestError("runtime-update-manual-install", "Esta instalación es demasiado antigua para actualizarse automáticamente. Instala manualmente la última APK.");
   }
 }
 
@@ -282,7 +292,7 @@ function selectAndroidArtifact(manifest: AndroidUpdateManifest, packageInfo: And
   const universal = manifest.artifacts.find((artifact) => artifact.abi === "universal");
   const artifact = exact ?? universal;
   if (!artifact) {
-    throw new Error(`No hay APK compatible con este dispositivo (${packageInfo.supportedAbis.join(", ")}).`);
+    throw updateRequestError("runtime-update-platform-unsupported", `No hay APK compatible con este dispositivo (${packageInfo.supportedAbis.join(", ")}).`);
   }
   return artifact;
 }
@@ -295,7 +305,7 @@ function readAndroidPackageInfo(bridge: AndroidUpdaterBridge): AndroidPackageInf
     supportedAbis?: string;
   };
   if (!raw.applicationId || !raw.versionName || typeof raw.versionCode !== "number") {
-    throw new Error("No se pudo leer la versión Android instalada.");
+    throw updateRequestError("runtime-update-installed-version", "No se pudo leer la versión Android instalada.");
   }
   return {
     applicationId: raw.applicationId,
@@ -309,7 +319,7 @@ async function installAndroidUpdate(update: PendingAndroidUpdate, onProgress?: (
   const bridge = requireAndroidUpdaterBridge();
   if (!bridge.canRequestPackageInstalls()) {
     bridge.openInstallPermissionSettings();
-    throw new Error("Android necesita permiso para instalar actualizaciones desde Neubiki. Actívalo y vuelve a pulsar Actualizar.");
+    throw updateRequestError("runtime-update-install-permission", "Android necesita permiso para instalar actualizaciones desde Neubiki. Actívalo y vuelve a pulsar Actualizar.");
   }
 
   // This Android bridge has one combined operation: retain protection for download
@@ -327,7 +337,11 @@ async function installAndroidUpdate(update: PendingAndroidUpdate, onProgress?: (
   };
 
   await new Promise<void>((resolve, reject) => {
-    const deadline=setTimeout(()=>{cleanup();reject(new Error("No se confirmó la apertura del instalador Android. Comprueba el estado antes de repetir la actualización."));},30*60_000);
+    const deadline=setTimeout(()=>{
+      cleanup();
+      reject(new ApiError(504, "Installer not confirmed", "No se confirmó la apertura del instalador Android. Comprueba el estado antes de repetir la actualización.",
+        "unknown", "runtime-update-installer-unconfirmed", requestId));
+    },30*60_000);
     const onEvent = (event: Event) => {
       const detail = (event as AndroidUpdaterEvent).detail;
       if (!detail || detail.requestId !== requestId) return;
@@ -350,7 +364,7 @@ async function installAndroidUpdate(update: PendingAndroidUpdate, onProgress?: (
       if (detail.event === "permission-required") {
         cleanup();
         bridge.openInstallPermissionSettings();
-        reject(new Error(detail.data?.message ?? "Android requiere permiso para instalar la APK."));
+        reject(updateRequestError("runtime-update-install-permission", detail.data?.message ?? "Android requiere permiso para instalar la APK."));
         return;
       }
       if (detail.event === "installer-opened") {

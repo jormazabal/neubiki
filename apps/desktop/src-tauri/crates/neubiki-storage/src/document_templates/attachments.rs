@@ -101,6 +101,12 @@ fn encoded_segment(value: &str) -> String {
 fn token(sha: &str, name: &str) -> String {
     format!("neubiki-template-resource:{sha}/{}", encoded_segment(name))
 }
+pub(super) fn captured(name:&str,bytes:&[u8])->Result<Attachment,String>{
+    if bytes.is_empty() || bytes.len() as u64>MAX_ATTACHMENT{return Err("Cada adjunto admite de1byte a1MiB".into());}
+    let mime=kind(name)?;contents(name,bytes)?;let sha256=sha256_hex(bytes);
+    Ok(Attachment{path:token(&sha256,name),name:name.into(),mime_type:mime.into(),sha256,byte_length:bytes.len() as u64,
+        data_base64:base64::engine::general_purpose::STANDARD.encode(bytes)})
+}
 fn target_parts(value: &str) -> (&str, &str) {
     let end = value.find(['?', '#']).unwrap_or(value.len());
     value.split_at(end)

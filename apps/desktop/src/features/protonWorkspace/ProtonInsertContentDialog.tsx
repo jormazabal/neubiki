@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { X } from "lucide-react";
+import { createPortal } from "react-dom";
 import { ModalFrame } from "../../components/ui/ModalFrame";
+import { Button } from "../../components/ui/Button";
+import { DialogHeading } from "../../components/patterns/DialogHeading";
+import { InlineNotice } from "../../components/patterns/InlineNotice";
 import { relativeAssetPath } from "./protonImages";
+import { useHandwrittenCopy } from "../../lib/i18n/handwrittenCopy";
+import { useUiLocale } from "../../lib/i18n/UiLocale";
+import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 
 type Props = {
   kind: "link" | "image";
@@ -11,6 +17,7 @@ type Props = {
   onClose: () => void;
   onSubmit: (source: string, alt: string) => boolean;
   onDelete?: () => boolean;
+  onInsertNotePage?: () => void;
 };
 
 function validLink(source: string) {
@@ -22,7 +29,10 @@ function validLink(source: string) {
   }
 }
 
-export function ProtonInsertContentDialog({ kind, initialValue = "", initialAlt = "", upload, onClose, onSubmit, onDelete }: Props) {
+export function ProtonInsertContentDialog({ kind, initialValue = "", initialAlt = "", upload, onClose, onSubmit, onDelete, onInsertNotePage }: Props) {
+  const noteCopy = useHandwrittenCopy().embed;
+  const english = useUiLocale() === "en";
+  const runtimeErrorMessage = useRuntimeErrorMessage();
   const image = kind === "image";
   const title = image ? onDelete ? "Editar imagen" : "Insertar imagen" : "Insertar enlace";
   const [source, setSource] = useState(initialValue);
@@ -58,7 +68,9 @@ export function ProtonInsertContentDialog({ kind, initialValue = "", initialAlt 
           if (!mounted.current) return;
           setConfirmedPath(reference);
         } catch (cause) {
-          if (mounted.current) setError(cause instanceof Error ? cause.message : "No se pudo confirmar la imagen en Proton.");
+          if (mounted.current) setError(runtimeErrorMessage(cause, english
+            ? "The image could not be confirmed in Proton. Check the destination."
+            : "No se pudo confirmar la imagen en Proton. Comprueba el destino."));
           return;
         } finally {
           pending.current = false;
@@ -67,42 +79,43 @@ export function ProtonInsertContentDialog({ kind, initialValue = "", initialAlt 
       }
     }
     if (image ? !relativeAssetPath(reference) && (!initialValue || reference !== initialValue) : !validLink(reference)) {
-      setError(image ? "Indica una ruta de imagen relativa al documento." : "Escribe una dirección de enlace válida.");
+      setError(image
+        ? english ? "Enter an image path relative to the document." : "Indica una ruta de imagen relativa al documento."
+        : english ? "Enter a valid link address." : "Escribe una dirección de enlace válida.");
       return;
     }
     if (onSubmit(reference, alt.trim())) onClose();
-    else setError("El documento cambió o no está disponible. Cierra esta ventana y vuelve a intentarlo.");
+    else setError(english ? "The document changed or is unavailable. Close this dialog and check the document."
+      : "El documento cambió o no está disponible. Cierra esta ventana y comprueba el documento.");
   }
 
-  return <ModalFrame label={title} onClose={close}>
+  return createPortal(<ModalFrame label={title} onClose={close}>
     <form onSubmit={submit} className="proton-content-dialog">
-      <header>
-        <h3>{title}</h3>
-        <button type="button" aria-label="Cerrar" onClick={close} disabled={busy}><X size={18} /></button>
-      </header>
+      <DialogHeading title={title} onClose={close} busy={busy} />
+      {image && !onDelete && onInsertNotePage && <Button variant="quiet" disabled={busy} onClick={onInsertNotePage}>{noteCopy.title}</Button>}
       {image && upload && <label>Archivo de imagen
-        <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy} onChange={event => {
+        <input data-autofocus className="ui-field" type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy} onChange={event => {
           setFile(event.target.files?.[0] ?? null);
           setConfirmedPath("");
         }} />
       </label>}
       <label>{image ? "Ruta relativa en Proton Drive" : "Dirección del enlace"}
-        <input data-autofocus={!image || undefined} type="text" inputMode={image ? "text" : "url"} value={source}
+        <input data-autofocus={(!image || !upload) || undefined} className="ui-field" type="text" inputMode={image ? "text" : "url"} value={source}
           disabled={Boolean(file) || busy} onChange={event => setSource(event.target.value)} placeholder={image ? "assets/imagen.png" : "https://"} />
       </label>
-      {image && <label>Texto alternativo<input value={alt} disabled={busy} onChange={event => setAlt(event.target.value)} /></label>}
-      {error && <p role="alert">{error}</p>}
+      {image && <label>Texto alternativo<input className="ui-field" value={alt} disabled={busy} onChange={event => setAlt(event.target.value)} /></label>}
+      {error && <InlineNotice tone="error" announce="alert">{error}</InlineNotice>}
       {confirmedPath && <p className="break-all text-ink-secondary">Imagen en Proton Drive · {confirmedPath}</p>}
       <footer>
-        {onDelete && <button type="button" className="proton-document-action mr-auto" disabled={busy} onClick={() => {
+        {onDelete && <Button variant="danger" className="mr-auto" disabled={busy} onClick={() => {
           if (onDelete()) onClose();
-          else setError("El documento cambió o no está disponible.");
-        }}>Eliminar imagen</button>}
-        <button type="button" className="proton-document-action" onClick={close} disabled={busy}>Cancelar</button>
-        <button type="submit" className="proton-document-action proton-document-primary" disabled={busy || (!file && !source.trim())}>
+          else setError(english ? "The document changed or is unavailable." : "El documento cambió o no está disponible.");
+        }}>Eliminar imagen</Button>}
+        <Button onClick={close} disabled={busy}>Cancelar</Button>
+        <Button type="submit" variant="primary" disabled={busy || (!file && !source.trim())}>
           {busy ? "Guardando imagen…" : onDelete ? "Aplicar cambios" : "Insertar"}
-        </button>
+        </Button>
       </footer>
     </form>
-  </ModalFrame>;
+  </ModalFrame>, document.body);
 }

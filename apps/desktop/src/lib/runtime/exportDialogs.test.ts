@@ -48,4 +48,23 @@ describe("export dialogs", () => {
     expect(withExportExtension("notes.md", "docx")).toBe("notes.docx");
     expect(withExportExtension("notes.pdf", "pdf")).toBe("notes.pdf");
   });
+
+  it("suggests the Neubiki extension when exporting a note with a legacy name", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    vi.mocked(saveDialog).mockResolvedValueOnce(null);
+    await selectHandwrittenExportFilePath("Boceto.KNOTE", "nbnote");
+    expect(saveDialog).toHaveBeenCalledWith({
+      title: "Exportar nota manuscrita",
+      defaultPath: "Boceto.nbnote",
+      filters: [{ name: "Nota manuscrita de Neubiki", extensions: ["nbnote"] }],
+    });
+  });
+  it("uses the app language for the picker title and Neubiki format name", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    vi.mocked(saveDialog).mockResolvedValue(null);
+    await selectExportFilePath("Decisión.md", "docx", "en");
+    expect(saveDialog).toHaveBeenCalledWith({ title: "Export document", defaultPath: "Decisión.docx", filters: [{ name: "Word", extensions: ["docx"] }] });
+    await selectHandwrittenExportFilePath("Boceto.knote", "nbnote", "en");
+    expect(saveDialog).toHaveBeenCalledWith({ title: "Export handwritten note", defaultPath: "Boceto.nbnote", filters: [{ name: "Neubiki handwritten note", extensions: ["nbnote"] }] });
+  });
 });

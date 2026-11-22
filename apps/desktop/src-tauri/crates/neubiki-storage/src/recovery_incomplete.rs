@@ -107,7 +107,7 @@ fn inspect(api: &LocalApi, key: &str) -> Result<Extract, String> {
                 "handwritten-note",
                 pages.len(),
                 strokes,
-                "knote",
+                "nbnote",
             )
         }
         _ => {

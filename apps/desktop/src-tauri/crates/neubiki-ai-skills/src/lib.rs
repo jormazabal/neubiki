@@ -180,6 +180,11 @@ struct LoadedSkill {
 
 const BASE_SKILLS: &[BaseSkillSource] = &[
     BaseSkillSource {
+        manifest_json: include_str!("base/neubiki.meeting_summary/manifest.json"),
+        instructions_markdown: include_str!("base/neubiki.meeting_summary/SKILL.md"),
+        examples: &[],
+    },
+    BaseSkillSource {
         manifest_json: include_str!("base/neubiki.research_report/manifest.json"),
         instructions_markdown: include_str!("base/neubiki.research_report/SKILL.md"),
         examples: &[(
@@ -925,6 +930,9 @@ fn prefilter_skills(payload: &Value) -> Vec<AiSkillSummary> {
         .and_then(Value::as_bool)
         .unwrap_or(true);
     skills.retain(|skill| {
+        if skill.id == "neubiki.meeting_summary" {
+            return payload["expectedAction"] == "summarize_meeting";
+        }
         if skill.id == "neubiki.mermaid" {
             return diagrams_enabled;
         }
@@ -1138,6 +1146,11 @@ fn compose_prompt_guidance(applications: &[AiSkillApplication], payload: &Value)
     let mut parts = Vec::new();
     for application in applications {
         match (application.skill_id.as_str(), application.mode_id.as_str()) {
+            ("neubiki.meeting_summary", mode) => {
+                if let Some(skill) = get_ai_skill(&application.skill_id) {
+                    parts.push(format!("Modo elegido: {mode}.\n{}", skill.instructions_markdown));
+                }
+            }
             ("neubiki.research_report", mode) => {
                 parts.push(research_report_prompt_guidance(payload, mode))
             }
@@ -1439,6 +1452,7 @@ fn known_validators() -> BTreeSet<&'static str> {
         "research.report.visuals",
         "handwritten.scene",
         "handwritten.quality",
+        "meeting.source",
     ]
     .into_iter()
     .collect()
@@ -1764,7 +1778,7 @@ mod tests {
     #[test]
     fn registry_loads_compact_base_skills_with_unique_valid_ids() {
         let skills = list_ai_skills();
-        assert_eq!(skills.len(), 9);
+        assert_eq!(skills.len(), 10);
         let ids = skills
             .iter()
             .map(|skill| skill.id.clone())
@@ -1774,6 +1788,7 @@ mod tests {
         assert!(ids.contains("neubiki.mermaid"));
         assert!(ids.contains("neubiki.handwritten_drawing"));
         assert!(ids.contains("neubiki.markdown"));
+        assert!(ids.contains("neubiki.meeting_summary"));
         assert!(skills.iter().all(|skill| skill.status == "valid"));
         assert!(skills.iter().all(|skill| !skill.modes.is_empty()));
     }

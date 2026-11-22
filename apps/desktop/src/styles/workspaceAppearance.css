@@ -1,0 +1,420 @@
+@font-face {
+  font-family: "Source Sans 3";
+  src: url("/fonts/source-sans-3.ttf") format("truetype");
+  font-weight: 200 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Source Sans 3";
+  src: url("/fonts/source-sans-3-italic.ttf") format("truetype");
+  font-style: italic;
+  font-weight: 200 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("/fonts/atkinson-next.ttf") format("truetype");
+  font-weight: 200 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("/fonts/atkinson-next-italic.ttf") format("truetype");
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Serif";
+  src: url("../../src-tauri/crates/neubiki-docs/assets/fonts/NotoSerif-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Serif";
+  src: url("../../src-tauri/crates/neubiki-docs/assets/fonts/NotoSerif-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Serif";
+  src: url("../../src-tauri/crates/neubiki-docs/assets/fonts/NotoSerif-Italic.ttf") format("truetype");
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Serif";
+  src: url("../../src-tauri/crates/neubiki-docs/assets/fonts/NotoSerif-BoldItalic.ttf") format("truetype");
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Sans Mono";
+  src: url("../../src-tauri/crates/neubiki-docs/assets/fonts/NotoSansMono-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Sans Mono";
+  src: url("../../src-tauri/crates/neubiki-docs/assets/fonts/NotoSansMono-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root[data-workspace-profile] {
+  --note-font-family: "Source Sans 3", system-ui, sans-serif;
+  --workspace-frame: rgb(var(--appearance-dark-frame));
+  --workspace-content: rgb(var(--appearance-light-editor));
+  background: var(--workspace-frame);
+}
+:root[data-workspace-profile="reading"] { --workspace-frame: rgb(var(--appearance-light-frame)); }
+:root[data-workspace-profile="night"] { --workspace-content: rgb(var(--appearance-dark-editor)); }
+:root[data-note-font="atkinson"] { --note-font-family: "Atkinson Hyperlegible Next", system-ui, sans-serif; }
+:root[data-note-font="noto-serif"] { --note-font-family: "Noto Serif", Georgia, serif; }
+:root[data-note-font="noto-mono"] { --note-font-family: "Noto Sans Mono", monospace; }
+
+:root[data-workspace-profile] {
+  --_tools: var(--appearance-light-tools);
+  --_elevated: var(--appearance-light-elevated);
+  --_divider: var(--appearance-light-divider);
+  --_border: var(--appearance-light-border);
+  --_hover: var(--appearance-light-hover);
+  --_selected: var(--appearance-light-selected);
+  --_pressed: var(--appearance-light-pressed);
+  --_logo: var(--appearance-light-logo);
+  --_connectionBg: var(--appearance-light-connectionBg);
+  --_connection: var(--appearance-light-connection);
+  --_successBg: var(--appearance-light-successBg);
+  --_success: var(--appearance-light-success);
+  --_warningBg: var(--appearance-light-warningBg);
+  --_warning: var(--appearance-light-warning);
+  --_errorBg: var(--appearance-light-errorBg);
+  --_error: var(--appearance-light-error);
+  --app-bg: var(--appearance-light-editor);
+  --app-surface: var(--appearance-light-editor);
+  --app-panel: var(--appearance-light-elevated);
+  --app-panel-strong: var(--appearance-light-hover);
+  --app-border: var(--appearance-light-border);
+  --app-text: var(--appearance-light-text);
+  --app-muted: var(--appearance-light-muted);
+  --accent: var(--appearance-light-action);
+  --accent-hover: var(--appearance-light-actionHover);
+  --accent-soft: var(--appearance-light-hover);
+  --accent-border: var(--appearance-light-border);
+  --accent-ring: var(--appearance-light-ink);
+  --accent-foreground: var(--appearance-light-onAction);
+  --editor-code-bg: var(--appearance-light-hover);
+  --editor-code-text: var(--appearance-light-ink);
+  --tooltip-bg: var(--appearance-dark-elevated);
+  --tooltip-text: var(--appearance-dark-text);
+  --tooltip-border: var(--appearance-dark-divider);
+  --proton-rail-text: rgb(var(--app-text));
+  --proton-rail-muted: rgb(var(--app-muted));
+  color-scheme: light;
+  scrollbar-color: rgb(var(--_border)) transparent;
+}
+:root[data-workspace-profile="night"],
+:root[data-workspace-profile]:not([data-workspace-profile="reading"]) :is(.proton-workspace-chrome,.proton-workspace-rail,.proton-tree-context,.proton-panel-divider,.proton-rail-dialog,.proton-mobile-back) {
+  --_tools: var(--appearance-dark-tools);
+  --_elevated: var(--appearance-dark-elevated);
+  --_divider: var(--appearance-dark-divider);
+  --_border: var(--appearance-dark-border);
+  --_hover: var(--appearance-dark-hover);
+  --_selected: var(--appearance-dark-selected);
+  --_pressed: var(--appearance-dark-pressed);
+  --_logo: var(--appearance-dark-logo);
+  --_connectionBg: var(--appearance-dark-connectionBg);
+  --_connection: var(--appearance-dark-connection);
+  --_successBg: var(--appearance-dark-successBg);
+  --_success: var(--appearance-dark-success);
+  --_warningBg: var(--appearance-dark-warningBg);
+  --_warning: var(--appearance-dark-warning);
+  --_errorBg: var(--appearance-dark-errorBg);
+  --_error: var(--appearance-dark-error);
+  --app-bg: var(--appearance-dark-editor);
+  --app-surface: var(--appearance-dark-editor);
+  --app-panel: var(--appearance-dark-elevated);
+  --app-panel-strong: var(--appearance-dark-hover);
+  --app-border: var(--appearance-dark-border);
+  --app-text: var(--appearance-dark-text);
+  --app-muted: var(--appearance-dark-muted);
+  --accent: var(--appearance-dark-action);
+  --accent-hover: var(--appearance-dark-actionHover);
+  --accent-soft: var(--appearance-dark-hover);
+  --accent-border: var(--appearance-dark-border);
+  --accent-ring: var(--appearance-dark-ink);
+  --accent-foreground: var(--appearance-dark-onAction);
+  --editor-code-bg: var(--appearance-dark-hover);
+  --editor-code-text: var(--appearance-dark-ink);
+  --tooltip-bg: var(--appearance-light-elevated);
+  --tooltip-text: var(--appearance-light-text);
+  --tooltip-border: var(--appearance-light-divider);
+  --proton-rail-text: rgb(var(--app-text));
+  --proton-rail-muted: rgb(var(--app-muted));
+  color-scheme: dark;
+  scrollbar-color: rgb(var(--_border)) transparent;
+}
+
+:root[data-workspace-profile] .proton-workspace {
+  --proton-frame: var(--workspace-frame);
+  --proton-surface: var(--workspace-content);
+  --proton-rail-text: rgb(var(--app-text));
+  --proton-rail-muted: rgb(var(--app-muted));
+  height: calc(100dvh / var(--appearance-scale, 1));
+  zoom: var(--appearance-scale, 1);
+}
+
+/* Body portals escape the workspace's zoom. Keep modal backdrops at viewport size. */
+:root[data-workspace-profile] body > :is(.proton-tree-context, .neubiki-editor-palette, [data-floating-layer], .neubiki-export-status),
+:root[data-workspace-profile] body > .neubiki-modal-overlay > * {
+  --appearance-portal-scale: var(--appearance-scale, 1);
+  zoom: var(--appearance-portal-scale);
+}
+:root[data-workspace-profile] body > .proton-tree-context {
+  max-width: calc((100vw - 16px) / var(--appearance-portal-scale));
+  max-height: calc((100dvh - 16px) / var(--appearance-portal-scale));
+}
+:root[data-workspace-profile] body > .neubiki-modal-overlay > :is(.proton-confirm-dialog, .proton-content-dialog, .proton-usage-dialog) {
+  max-height: calc((100dvh - 24px) / var(--appearance-portal-scale));
+  overflow-y: auto;
+}
+:root[data-workspace-profile] .proton-workspace-brand {
+  background: rgb(var(--_logo)) url("/brand/neubiki-monogram.png") center / contain no-repeat;
+}
+:root[data-workspace-profile] .proton-workspace-rail {
+  background: var(--proton-frame);
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] .proton-workspace-chrome { color: rgb(var(--app-text)); }
+:root[data-workspace-profile] :is(.proton-document-side, .proton-workspace-empty-side) {
+  --proton-surface: rgb(var(--_tools));
+  --app-surface: var(--_tools);
+}
+:root[data-workspace-profile] .proton-note-surface { zoom: var(--note-inverse-scale, 1); }
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) {
+  font-family: var(--note-font-family) !important;
+  font-size: var(--note-size) !important;
+  font-synthesis: style;
+  caret-color: rgb(var(--accent-ring));
+}
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) :is(p, li, th, td, blockquote, figcaption) {
+  font-family: var(--note-font-family) !important;
+  font-size: var(--note-size) !important;
+  line-height: var(--note-leading);
+}
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) :is(h1,h2,h3,h4,h5,h6) {
+  font-family: var(--note-font-family) !important;
+  margin: 0.85em 0 0.35em;
+}
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) h1 { font-size: var(--note-h1) !important; border: 0; padding-bottom: 0; }
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) h2 { font-size: var(--note-h2) !important; }
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) h3 { font-size: var(--note-h3) !important; }
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) h4 { font-size: var(--note-h4) !important; }
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) h5 { font-size: var(--note-h5) !important; }
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) h6 { font-size: var(--note-h6) !important; }
+:root[data-workspace-profile] .proton-document-paper .ProseMirror :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+:root[data-workspace-profile] .proton-note-surface .ProseMirror .label-wrapper .checked svg { fill: rgb(var(--accent)); }
+:root[data-workspace-profile] .proton-note-surface .ProseMirror .label-wrapper .unchecked svg { fill: rgb(var(--app-muted)); }
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor :is(.ProseMirror, .editor) :is(code, pre) {
+  font-family: "Noto Sans Mono", monospace !important;
+}
+:root[data-workspace-profile] .proton-note-surface .neubiki-editor ::selection {
+  background: rgb(var(--_selected));
+  color: rgb(var(--app-text));
+}
+
+:root[data-workspace-profile] .neubiki-editor .neubiki-editor-paste-notice[data-tone="warning"] {
+  background: rgb(var(--_warningBg));
+  color: rgb(var(--_warning));
+}
+:root[data-workspace-profile] .neubiki-editor .neubiki-editor-paste-notice[data-tone="error"] {
+  background: rgb(var(--_errorBg));
+  color: rgb(var(--_error));
+}
+:root[data-workspace-profile] .neubiki-editor .neubiki-editor-paste-notice[data-tone] button { color: inherit; }
+
+:root[data-workspace-profile] :is(.proton-confirm-dialog, .proton-account-popover, .proton-tree-context,
+  [data-floating-layer], .proton-content-dialog, .proton-account-loading) {
+  background: rgb(var(--_elevated));
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] .proton-tree-context.neubiki-tree-menu > button {
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] :is(.proton-tree-context, .proton-account-popover) > button > svg {
+  color: rgb(var(--app-muted));
+}
+:root[data-workspace-profile] .proton-tree-context.neubiki-tree-menu > button:is(:hover,:focus-visible) {
+  background: rgb(var(--_hover));
+}
+:root[data-workspace-profile] .proton-tree-context.neubiki-tree-menu > button:focus-visible {
+  outline: 2px solid rgb(var(--accent-ring));
+  outline-offset: -2px;
+}
+:root[data-workspace-profile] .proton-tree-context.neubiki-tree-menu [data-danger] { color: rgb(var(--_error)); }
+
+:root[data-workspace-profile] :is(.proton-panel-toggle, .proton-rail-icon, .proton-tree-options,
+  .proton-tree-item, .proton-mode-back, .proton-account-trigger, .proton-account-popover button):enabled:hover,
+:root[data-workspace-profile] :is(.proton-panel-toggle, .proton-tree-options, .proton-account-trigger)[aria-expanded="true"] {
+  background: rgb(var(--_hover));
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] .proton-tree-row:hover { background: rgb(var(--_hover)); }
+:root[data-workspace-profile] :is(.proton-tree-row[data-current="true"], .proton-tree-item[aria-current]) {
+  background: rgb(var(--_selected));
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] :is(.proton-workspace-folder-control > svg, .proton-tree-folder-icon,
+  .proton-mode-navigation .proton-tree-item[aria-current] > svg, .proton-tree-item[aria-current] > svg) {
+  color: rgb(var(--accent-ring));
+}
+:root[data-workspace-profile] :is(.proton-workspace-folder, .proton-tree-branch, .proton-account-popover hr,
+  .proton-document-top, .proton-document-header, .proton-document-footer, .proton-document-tabs, .proton-tool-header,
+  .proton-document-side-content, .proton-mode-sections) {
+  border-color: rgb(var(--_divider));
+}
+:root[data-workspace-profile] :is(.proton-tool-empty, .proton-workspace-start p,
+  .proton-workspace-empty-side p) { color: rgb(var(--app-muted)); }
+:root[data-workspace-profile] .proton-panel-divider::after { background: rgb(var(--_border)); }
+:root[data-workspace-profile] .proton-panel-divider:is(:hover,:active,:focus-visible)::after { background: rgb(var(--accent-ring)); }
+:root[data-workspace-profile] .proton-workspace-tree { scrollbar-color: rgb(var(--_border)) transparent; }
+:root[data-workspace-profile] :is(.proton-account-trigger,.proton-account-avatar) {
+  background: rgb(var(--_elevated));
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] .proton-account-avatar { background: rgb(var(--_selected)); }
+:root[data-workspace-profile] .proton-account-popover { border-color: rgb(var(--_border)); }
+:root[data-workspace-profile] :is(.proton-auth-pending button,.proton-workspace-start svg) { color: rgb(var(--accent-ring)); }
+
+:root[data-workspace-profile] .proton-document-action:enabled:hover {
+  color: rgb(var(--app-text));
+  background: rgb(var(--_hover));
+}
+:root[data-workspace-profile] .bg-brand-orange:enabled:active {
+  color: rgb(var(--accent-foreground));
+  background: rgb(var(--_pressed));
+}
+:root[data-workspace-profile] :is(.proton-workspace [class~="text-brand-dark"], .proton-workspace [class~="text-brand-orange"]) {
+  color: rgb(var(--accent-ring));
+}
+:root[data-workspace-profile] .proton-document-tools .ui-button {
+  border-color: rgb(var(--_divider));
+}
+:root[data-workspace-profile] :is(.proton-document-tools .ui-button[aria-expanded="true"], .proton-mobile-tools) {
+  background: rgb(var(--_selected));
+  color: rgb(var(--accent-ring));
+}
+:root[data-workspace-profile] :is(.proton-document-side input,.proton-workspace input[type="radio"],.proton-workspace input[type="checkbox"]) {
+  accent-color: rgb(var(--accent));
+}
+:root[data-workspace-profile] .proton-document-side .document-tools-panel button:not(.ui-button):enabled:hover { background: rgb(var(--_hover)); }
+:root[data-workspace-profile] :is(.proton-document-reference,.proton-document-image-background) { background: rgb(var(--app-panel)); }
+:root[data-workspace-profile] .proton-document-tabs .neubiki-document-tabs {
+  min-height: 42px;
+  height: auto;
+  align-items: center;
+  gap: 4px;
+  border-color: rgb(var(--_divider));
+  background: transparent;
+  padding: 5px 8px;
+}
+:root[data-workspace-profile] .proton-document-tabs .neubiki-document-tab {
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 12px;
+}
+:root[data-workspace-profile] .proton-document-tabs .neubiki-document-tab:hover { background: rgb(var(--_hover)); }
+:root[data-workspace-profile] .proton-document-tabs :is(.neubiki-document-tab-active, .neubiki-document-tab-compact-active) {
+  border-color: rgb(var(--_divider));
+  background: rgb(var(--_selected));
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] .proton-document-tabs .neubiki-tab-underline { display: none; }
+:root[data-workspace-profile] :is(.neubiki-editor-toolbar, .neubiki-editor-palette) {
+  border-color: rgb(var(--_divider));
+  background: rgb(var(--_elevated));
+  color: rgb(var(--app-text));
+}
+:root[data-workspace-profile] .neubiki-editor-toolbar { min-height: 40px; }
+:root[data-workspace-profile] :is(.neubiki-editor-toolbar, .neubiki-editor-palette) .toolbar-button-active {
+  border-color: transparent;
+  background: rgb(var(--_selected));
+  color: rgb(var(--accent-ring));
+  box-shadow: none;
+}
+:root[data-workspace-profile] :is(.proton-document-side input:not([type="checkbox"]), .proton-content-dialog, .proton-content-dialog input) {
+  border-color: rgb(var(--_border));
+}
+:root[data-workspace-profile] :is(.proton-document-side input:not([type="checkbox"]), .proton-content-dialog input) {
+  color: rgb(var(--app-text));
+  background: rgb(var(--_elevated));
+}
+:root[data-workspace-profile] :is(.text-red-700, .proton-account-popover .proton-account-signout > svg) {
+  color: rgb(var(--_error));
+}
+:root[data-workspace-profile] .text-amber-700 { color: rgb(var(--_warning)); }
+
+:root[data-workspace-profile] :is(.proton-workspace, .neubiki-modal-overlay, .neubiki-editor-palette, [data-floating-layer], .neubiki-export-status) :is(button, input,select,textarea,a,[tabindex]):focus-visible {
+  outline: 2px solid rgb(var(--accent-ring));
+  outline-offset: 2px;
+}
+
+.workspace-appearance-form { display: grid; gap: 18px; max-width: 74rem; container-type: inline-size; }
+.workspace-appearance-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.workspace-appearance-actions [role="status"] { font-size: .875rem; }
+.workspace-appearance-section { min-width: 0; }
+.workspace-appearance-section legend { font-size: 1.125rem; font-weight: 700; padding: 0 0 6px; }
+.workspace-appearance-section:disabled { opacity: .7; }
+.workspace-profile-options { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.workspace-profile-option,.workspace-color-option { position: relative; cursor: pointer; }
+.workspace-profile-option input,.workspace-color-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.workspace-profile-card { display: flex; flex-direction: column; height: 100%; border: 1px solid rgb(var(--_border)); padding: 8px; border-radius: 14px; text-align: center; gap: 4px; background: rgb(var(--_elevated)); }
+.workspace-profile-card:hover { background: rgb(var(--_hover)); }
+.workspace-profile-option input:checked + .workspace-profile-card { border-color: rgb(var(--accent-ring)); box-shadow: inset 0 0 0 1px rgb(var(--accent-ring)); background: rgb(var(--_selected)); }
+.workspace-profile-option input:focus-visible + .workspace-profile-card,
+.workspace-color-option input:focus-visible + span { outline: 2px solid rgb(var(--accent-ring)); outline-offset: 3px; }
+.workspace-profile-title { font-size: .875rem; font-weight: 700; }
+.workspace-profile-card small,.workspace-appearance-row small { color: rgb(var(--app-muted)); font-size: .8125rem; }
+.workspace-profile-check { position: absolute; top: 9px; right: 9px; background: rgb(var(--accent)); color: rgb(var(--accent-foreground)); border-radius: 50%; padding: 2px; }
+.workspace-profile-preview { display: grid; grid-template-columns: 24% 51% 25%; height: 61px; border: 1px solid var(--preview-divider); border-radius: 5px; overflow: hidden; text-align: start; }
+.workspace-profile-preview > span { display: grid; align-content: start; min-width: 0; gap: 5px; padding: 7px 4px; color: var(--preview-ink); background: var(--preview-editor); }
+.workspace-profile-preview > span:first-child { background: var(--preview-rail); color: var(--preview-rail-ink); }
+.workspace-profile-preview > span:last-child { background: var(--preview-tools); border-inline-start: 1px solid var(--preview-divider); }
+.workspace-profile-preview b { display: grid; width: 14px; height: 14px; place-items: center; border-radius: 3px; font-size: 9px; line-height: 1; color: #fff; background: var(--preview-logo); }
+.workspace-profile-preview i { border-radius: 2px; background: currentColor; opacity: .6; height: 2px; width: 84%; }
+.workspace-profile-preview i:nth-child(2) { width: 66%; }
+.workspace-appearance-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); align-items: center; gap: 8px 14px; min-height: 48px; padding: 6px 0; border-top: 1px solid rgb(var(--_divider)); }
+.workspace-appearance-row strong,.workspace-appearance-row small { display: block; }
+.workspace-appearance-row select { width: min(100%, 15rem); min-height: 39px; border: 1px solid rgb(var(--_border)); border-radius: 7px; color: rgb(var(--app-text)); background: rgb(var(--_elevated)); padding: 5px 9px; }
+.workspace-color-options { display: grid; grid-template-columns: repeat(6,36px) minmax(0,1fr); gap: 6px; align-items: center; }
+.workspace-color-option { display: grid; min-height: 36px; }
+.workspace-color-option span { display: grid; place-items: center; border-radius: 7px; border: 1px solid rgb(var(--_border)); background: var(--swatch); color: var(--swatch-mark); }
+.workspace-color-option input:checked + span { box-shadow: 0 0 0 1px rgb(var(--app-surface)), 0 0 0 3px rgb(var(--accent-ring)); }
+.workspace-color-name { grid-column: 7; grid-row: 1 / span 2; padding-inline-start: 4px; font-size: .875rem; }
+.workspace-color-option:nth-of-type(n+7) { grid-row: 2; }
+
+@container (max-width: 620px) {
+  .workspace-profile-options { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .workspace-appearance-row { grid-template-columns: minmax(0,1fr); }
+  .workspace-color-options { grid-template-columns: repeat(6,minmax(0,1fr)); max-width: 24rem; }
+  .workspace-color-name { grid-column: 1 / -1; grid-row: 3; }
+}
+@container (max-width: 250px) {
+  .workspace-profile-options { grid-template-columns: minmax(0,1fr); }
+  .workspace-color-options { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .workspace-color-option:nth-of-type(n+7) { grid-row: auto; }
+  .workspace-color-name { grid-row: 4; }
+}
+@media (max-width: 767px), (pointer: coarse) {
+  :root[data-workspace-profile] .proton-document-tabs .neubiki-document-tab {
+    min-height: calc(48px / var(--appearance-scale, 1));
+  }
+  .workspace-appearance-row select,.workspace-appearance-actions button,.workspace-color-option,
+  .proton-document-action,.proton-workspace nav button,.proton-rail-icon,.proton-workspace-folder-control,
+  .proton-account-popover button,.proton-document-side .document-tools-panel button:not(.ui-button) {
+    min-height: calc(44px / var(--appearance-scale, 1));
+  }
+  :root[data-workspace-profile] .proton-tree-context.neubiki-tree-menu > button {
+    min-height: max(44px, calc(44px / var(--appearance-portal-scale, 1)));
+  }
+}

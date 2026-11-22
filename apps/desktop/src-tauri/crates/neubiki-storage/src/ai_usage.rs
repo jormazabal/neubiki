@@ -112,6 +112,10 @@ impl LocalApi {
     }
     pub fn recording_transcription_credential(&self, project: &str) -> Result<String, String> {
         if !request_scope::portable_id(project) { return Err("Proyecto de grabación no válido".into()); }
+        if project == neubiki_recording::model::MEETING_USAGE_SCOPE
+            && self.read_config_checked()?["ai"]["transcription"]["enabled"] != true {
+            return Err("Activa la transcripción en Configuración antes de enviar el audio.".into());
+        }
         self.spend_preflight(Some(project))?;
         self.recording_credential()
     }

@@ -30,10 +30,14 @@ fn route(path: &str, content: bool) -> Option<(Kind, String)> {
     Some((kind, id.into()))
 }
 pub fn is_export_request(method: &str, path: &str) -> bool {
-    method.eq_ignore_ascii_case("POST") && route(path, false).is_some()
+    method.eq_ignore_ascii_case("POST") && (is_proton_export(path, false) || route(path, false).is_some())
 }
 pub fn is_export_content_request(method: &str, path: &str) -> bool {
-    method.eq_ignore_ascii_case("POST") && route(path, true).is_some()
+    method.eq_ignore_ascii_case("POST") && (is_proton_export(path, true) || route(path, true).is_some())
+}
+fn is_proton_export(path: &str, content: bool) -> bool {
+    let (path, _) = split_path(path);
+    path == if content { "/api/proton/export/content" } else { "/api/proton/export" }
 }
 
 pub(super) fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
@@ -80,8 +84,7 @@ fn destination_hash(path: &Path) -> Result<Option<String>, String> {
 }
 fn destination(
     api: &LocalApi,
-    source: &Path,
-    root: &Path,
+    source: Option<(&Path, &Path)>,
     format: &str,
     output: &str,
 ) -> Result<Destination, String> {
@@ -106,7 +109,7 @@ fn destination(
         .file_name()
         .ok_or("Falta el nombre del archivo exportado")?;
     let target = parent.join(name);
-    if let Ok(source) = source.canonicalize() {
+    if let Some(source) = source.and_then(|(file, _)| file.canonicalize().ok()) {
         if target.canonicalize().ok().as_ref() == Some(&source) {
             return Err(
                 "Exportar no puede reemplazar el documento de origen. Elige otro archivo".into(),
@@ -127,7 +130,7 @@ fn destination(
         }
     }
     if let Ok(private) = api.app_data_dir.canonicalize() {
-        if target.starts_with(private) && !target.starts_with(root) {
+        if target.starts_with(private) && !source.is_some_and(|(_, root)| target.starts_with(root)) {
             return Err(
                 "La exportación no puede escribir sobre el estado privado de la aplicación".into(),
             );
@@ -138,6 +141,111 @@ fn destination(
         path: target,
         parent,
     })
+}
+
+fn publish_bytes(target: &Destination, bytes: &[u8]) -> Result<(), String> {
+    match target.base {
+        Some(_) => atomic_io::write(&target.path, bytes),
+        None => atomic_io::create(&target.path, bytes),
+    }
+    .map_err(|error| format!("No se pudo publicar la exportación: {error}"))
+}
+
+fn export_diagrams(body: &Value) -> Result<Vec<neubiki_docs::DiagramAsset>, String> {
+    if let Some(assets) = body["diagramAssets"].as_array() {
+        if assets.len() > 128 {
+            return Err("Demasiados diagramas en la exportación".into());
+        }
+        let mut total = 0;
+        for asset in assets {
+            total += serde_json::to_vec(asset).map_err(|_| "Diagrama no válido")?.len();
+            if total > MAX_INPUT as usize {
+                return Err("Los diagramas de exportación superan 64 MiB".into());
+            }
+        }
+    }
+    Ok(neubiki_docs::diagram_assets_from_json(body.get("diagramAssets")))
+}
+
+pub(super) fn render_proton_export(api: &LocalApi, body: &Value, format: &str) -> Result<(String, String, Vec<u8>), String> {
+    render_proton_export_with_template(api, body, format, None, None)
+}
+pub(super) fn render_proton_export_with_template(api: &LocalApi, body: &Value, format: &str, frozen_template: Option<&Value>, frozen_profile: Option<&export_profiles::Profile>) -> Result<(String, String, Vec<u8>), String> {
+    if body.get("recovery").is_some() {
+        if format != "md" {
+            return Err("La recuperación se exporta como Markdown.".into());
+        }
+        let (name, markdown) = api.proton_recovery_export(body)?;
+        let mime = if name.ends_with(".nbnote") { "application/vnd.neubiki.handwritten-note+json" } else { "text/markdown;charset=utf-8" };
+        return Ok((mime.into(), name, markdown.into_bytes()));
+    }
+    if let Some(note) = body.get("handwritten") {
+        api.proton_export_assets(body, "", false)?;
+        let name = body["name"].as_str().filter(|name| name.len() <= 1024 && !name.contains(['/', '\\', ':', '\0']))
+            .ok_or("Nombre de nota manuscrita no válido")?;
+        document_validation::handwritten(note)?;
+        let bytes = serde_json::to_vec(note).map_err(|_| "No se puede preparar la nota")?;
+        if bytes.len() > 8 * 1024 * 1024 { return Err("La nota manuscrita supera 8 MiB".into()); }
+        return match format {
+            "nbnote" => Ok(("application/vnd.neubiki.handwritten-note+json".into(), with_extension(name, "nbnote"), bytes)),
+            "pdf" => Ok(("application/pdf".into(), with_extension(name, "pdf"), neubiki_docs::handwritten_note_pdf(note)?)),
+            "png" => Ok(("image/png".into(), with_extension(name, "png"), neubiki_docs::handwritten_note_png(note, body["pageId"].as_str(), 1.5)?.1)),
+            "svg" => Ok(("image/svg+xml".into(), with_extension(name, "svg"), neubiki_docs::handwritten_note_svg(note, body["pageId"].as_str())?.1.into_bytes())),
+            _ => Err("Formato de nota manuscrita no compatible".into()),
+        };
+    }
+    let name = body["name"].as_str().filter(|name| {
+        name.len() <= 1024
+            && !name.contains(['/', '\\', ':', '\0'])
+            && proton_workspace::is_markdown(name)
+    }).ok_or("Nombre de documento Markdown no válido")?;
+    let markdown = body["markdown"].as_str().filter(|text| text.len() <= 4 * 1024 * 1024)
+        .ok_or("La exportación requiere un documento Markdown de hasta 4 MiB")?;
+    let profile = if format != "md" && frozen_profile.is_some() {
+        let profile = frozen_profile.ok_or("Falta el perfil revisado del lote")?;
+        if body["profileId"].as_str() != Some(profile.id.as_str()) { return Err("El perfil no coincide con la revisión del lote.".into()); }
+        Some(profile.clone())
+    } else { match (format, body["profileId"].as_str(), body["profileRevision"].as_str()) {
+        ("md", _, _) => None,
+        (_, Some(id), Some(revision)) => Some(match body["profileSource"].as_str() {
+            Some("project") => api.proton_shared_export_profile(body, id, revision)?,
+            None | Some("device") => api.proton_export_profile(id, revision)?,
+            _ => return Err("El origen del perfil de exportación no es válido.".into()),
+        }),
+        (_, None, None) if body["profileId"].is_null() && body["profileRevision"].is_null() => None,
+        _ => return Err("La selección de perfil de exportación no es válida.".into()),
+    }};
+    let images = api.proton_export_assets(body, markdown, format != "md")?;
+    let mut template = match &profile {
+        Some(profile) => profile.style.clone(),
+        None => match frozen_template { Some(template) => template.clone(), None => api.read_export_template_checked()? },
+    };
+    let decorated;
+    let markdown = if let Some(profile) = &profile {
+        decorated = export_profiles::decorate(name, markdown, profile);
+        if profile.cover { template["document"]["includeTitle"] = json!(false); }
+        &decorated
+    } else {
+        markdown
+    };
+    let diagrams = export_diagrams(body)?;
+    if format != "md" {
+        neubiki_docs::validate_export_image_layout(markdown, &images)?;
+    }
+    let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        export_bytes(name, markdown, format, &diagrams, &images, &template)
+    })).map_err(|_| "La conversión se interrumpió sin producir un archivo exportado")??;
+    if frozen_profile.is_none() && format != "md" && body["profileSource"] == "project" {
+        api.proton_shared_export_profile(body, body["profileId"].as_str().ok_or("Falta el perfil compartido")?, body["profileRevision"].as_str().ok_or("Falta la revisión de perfil")?)?;
+    }
+    Ok(output)
+}
+
+fn proton_format(body: &Value) -> Result<&str, String> {
+    match body["format"].as_str() {
+        Some(format @ ("md" | "pdf" | "docx" | "nbnote" | "png" | "svg")) => Ok(format),
+        _ => Err("Formato de exportación no soportado".into()),
+    }
 }
 
 enum Input {
@@ -221,30 +329,19 @@ impl LocalApi {
                 } else {
                     self.export_image_assets_checked(id, &markdown)?
                 };
-                if let Some(assets) = body["diagramAssets"].as_array() {
-                    let mut total = 0usize;
-                    if assets.len() > 128 {
-                        return Err("Demasiados diagramas en la exportación".into());
-                    }
-                    for asset in assets {
-                        total = total.saturating_add(asset.to_string().len());
-                        if total > 64 * 1024 * 1024 {
-                            return Err("Los diagramas de exportación superan 64 MiB".into());
-                        }
-                    }
-                }
+                let diagrams = export_diagrams(&body)?;
                 let mut template=profile.as_ref().map(|p|p.style.clone()).unwrap_or(self.read_export_template_checked()?);
                 if let Some(profile)=&profile{markdown=export_profiles::decorate(&name,&markdown,profile);if profile.cover{template["document"]["includeTitle"]=json!(false);}}
                 Input::Markdown {
                     markdown,
-                    diagrams: neubiki_docs::diagram_assets_from_json(body.get("diagramAssets")),
+                    diagrams,
                     images,
                     template,
                 }
             }
             Kind::Handwritten => {
                 if !is_handwritten_note_path(&source)
-                    || !matches!(format.as_str(), "knote" | "pdf" | "png" | "svg")
+                    || !matches!(format.as_str(), "nbnote" | "knote" | "pdf" | "png" | "svg")
                 {
                     return Err("Formato o nota a mano no compatible con la exportación".into());
                 }
@@ -275,8 +372,7 @@ impl LocalApi {
         let output = if to_file {
             Some(destination(
                 self,
-                &source,
-                &root,
+                Some((&source, &root)),
                 &format,
                 body["outputPath"].as_str().ok_or("Falta outputPath")?,
             )?)
@@ -368,9 +464,9 @@ impl PreparedExport {
                 )?
             }
             Input::Handwritten { content, page_id } => match self.format.as_str() {
-                "knote" => (
+                "nbnote" | "knote" => (
                     "application/vnd.neubiki.handwritten-note+json".into(),
-                    with_extension(&self.name, "knote"),
+                    with_extension(&self.name, &self.format),
                     serde_json::to_vec_pretty(content).map_err(|error| error.to_string())?,
                 ),
                 "pdf" => (
@@ -421,19 +517,14 @@ impl CompletedExport {
         }
         let checked = destination(
             api,
-            &work.source,
-            &work.root,
+            Some((&work.source, &work.root)),
             &work.format,
             &target.path.to_string_lossy(),
         )?;
         if checked.parent != target.parent || checked.base != target.base {
             return Err("El destino cambió mientras se convertía el documento. Se conserva sin sobrescribir".into());
         }
-        match target.base {
-            Some(_) => atomic_io::write(&target.path, &self.bytes),
-            None => atomic_io::create(&target.path, &self.bytes),
-        }
-        .map_err(|error| format!("No se pudo publicar la exportación: {error}"))?;
+        publish_bytes(&target, &self.bytes)?;
         Ok(
             json!({"documentId":if matches!(work.kind,Kind::Markdown){Some(&work.id)}else{None},"noteId":if matches!(work.kind,Kind::Handwritten){Some(&work.id)}else{None},"format":work.format,"outputPath":target.path,"exportedAt":neubiki_core::now_iso()}),
         )
@@ -457,6 +548,23 @@ fn dispatch_export_with(
     let _work = queue
         .lock()
         .map_err(|_| "La cola de exportación no está disponible")?;
+    if is_proton_export(path, false) {
+        let api = mutations.lock().map_err(|_| "No se puede preparar la exportación")?.clone();
+        let format = proton_format(&body)?;
+        let output = body["outputPath"].as_str().ok_or("Falta outputPath")?;
+        let output_format = if body.get("recovery").is_some() && output.to_ascii_lowercase().ends_with(".nbnote") { "nbnote" } else { format };
+        let target = destination(&api, None, output_format, output)?;
+        if body.get("recovery").is_some() && target.base.is_some() {
+            return Err("Elige un archivo nuevo para exportar el borrador recuperado.".into());
+        }
+        let (_, _, bytes) = render_proton_export(&api, &body, format)?;
+        let checked = destination(&api, None, output_format, output)?;
+        if checked.parent != target.parent || checked.base != target.base {
+            return Err("El destino cambió mientras se convertía el documento. Se conserva sin sobrescribir".into());
+        }
+        publish_bytes(&target, &bytes)?;
+        return ok(json!({"format":format,"outputPath":target.path,"exportedAt":neubiki_core::now_iso()}));
+    }
     let (kind, id) = route(path, false).ok_or("Ruta de exportación no válida")?;
     let work = mutations
         .lock()
@@ -478,6 +586,11 @@ pub fn dispatch_export_content(
     let _work = queue
         .lock()
         .map_err(|_| "La cola de exportación no está disponible")?;
+    if is_proton_export(path, true) {
+        let api = mutations.lock().map_err(|_| "No se puede preparar la exportación")?.clone();
+        let (content_type, filename, bytes) = render_proton_export(&api, &body, proton_format(&body)?)?;
+        return Ok(binary(200, content_type, Some(filename), bytes));
+    }
     let (kind, id) = route(path, true).ok_or("Ruta de contenido de exportación no válida")?;
     let work = mutations
         .lock()
@@ -610,6 +723,81 @@ mod tests {
             output,
         }
     }
+    #[test]
+    fn proton_export_converts_the_editor_snapshot_in_all_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let api = LocalApi::new(dir.path().join("state"), "test".into(), "test".into());
+        let private = api.pd_private_root().join("proton-workspace");
+        fs::create_dir_all(&private).unwrap();
+        fs::write(private.join("selection.json"), json!({
+            "schemaVersion": 1, "accountId": "acct", "root": {"nodeId": "root", "type": "folder", "name": "Pruebas"}
+        }).to_string()).unwrap();
+        let mutations = Mutex::new(api);
+        let queue = Mutex::new(());
+        let text = "# Borrador de prueba\n\n**Contenido en el editor**";
+        let mut request = json!({
+            "accountId": "acct", "rootId": "root", "nodeId": "file", "name": "Documento.md", "markdown": text
+        });
+        for (format, magic) in [("md", text.as_bytes()), ("pdf", b"%PDF"), ("docx", b"PK\x03\x04")] {
+            request["format"] = json!(format);
+            let result = dispatch_export_content(&mutations, &queue, "/api/proton/export/content", request.clone()).unwrap();
+            assert_eq!(result.filename.as_deref(), Some(format!("Documento.{format}").as_str()));
+            assert!(base64::engine::general_purpose::STANDARD.decode(result.data_base64).unwrap().starts_with(magic));
+        }
+        let destination = dir.path().join("Plano.md");
+        request["format"] = json!("md");
+        request["outputPath"] = json!(destination);
+        dispatch_export(&mutations, &queue, "/api/proton/export", request.clone()).unwrap();
+        assert_eq!(fs::read_to_string(destination).unwrap(), text);
+        request["rootId"] = json!("other");
+        assert!(dispatch_export_content(&mutations, &queue, "/api/proton/export/content", request).is_err());
+    }
+    #[test]
+    fn proton_export_uses_the_reviewed_profile_for_word_and_ignores_it_for_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let api = LocalApi::new(dir.path().join("state"), "test".into(), "test".into());
+        let private = api.pd_private_root().join("proton-workspace");
+        fs::create_dir_all(&private).unwrap();
+        fs::write(private.join("selection.json"), json!({
+            "schemaVersion":1, "accountId":"acct", "root":{"nodeId":"root","type":"folder","name":"Pruebas"}
+        }).to_string()).unwrap();
+        let profile_id = "export-profile-12345678901234567890123456789012";
+        let profiles = api.change_export_profiles(json!({
+            "revision":null,"action":"capture","id":profile_id,"name":"Informe","cover":true,"contents":true
+        })).unwrap();
+        let mut request = json!({
+            "accountId":"acct","rootId":"root","nodeId":"file","name":"Documento.md",
+            "markdown":"# Contenido\n\nPárrafo","profileId":profile_id,"profileRevision":profiles["revision"],
+        });
+        let (_, _, output) = render_proton_export(&api, &request, "docx").unwrap();
+        let mut package = zip::ZipArchive::new(std::io::Cursor::new(output)).unwrap();
+        let mut xml = String::new();
+        package.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(xml.contains("Índice de títulos"));
+        assert!(xml.contains("Párrafo"));
+        request["profileRevision"] = json!("stale");
+        assert!(render_proton_export(&api, &request, "docx").unwrap_err().contains("cambiaron"));
+        let (_, _, original) = render_proton_export(&api, &request, "md").unwrap();
+        assert_eq!(original, request["markdown"].as_str().unwrap().as_bytes());
+    }
+
+    #[test]
+    fn proton_export_batch_uses_one_frozen_profile_without_provider_reads_per_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let api = LocalApi::new(dir.path().join("state"), "test".into(), "test".into());
+        let private = api.pd_private_root().join("proton-workspace");
+        fs::create_dir_all(&private).unwrap();
+        fs::write(private.join("selection.json"), json!({"schemaVersion":1,"accountId":"acct","root":{"nodeId":"root","type":"folder","name":"Pruebas"}}).to_string()).unwrap();
+        let profile = export_profiles::Profile { id: "export-profile-frozen".into(), name: "Compartido".into(), cover: true, contents: false, style: api.read_export_template_checked().unwrap() };
+        let mut request = json!({"accountId":"acct","rootId":"root","nodeId":"file","name":"Documento.md","markdown":"# Contenido",
+            "profileSource":"project","profileId":profile.id,"profileRevision":"profiles~remote"});
+        // No provider/session is configured. Batch verifies the shared revision at its boundaries.
+        let (_, _, bytes) = render_proton_export_with_template(&api, &request, "docx", None, Some(&profile)).unwrap();
+        assert!(bytes.starts_with(b"PK"));
+        request["profileId"] = json!("export-profile-other");
+        assert!(render_proton_export_with_template(&api, &request, "docx", None, Some(&profile)).unwrap_err().contains("no coincide"));
+    }
+
     #[test]
     fn conversion_does_not_hold_document_authority_and_captures_the_clicked_snapshot() {
         let f = fixture();

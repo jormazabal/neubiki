@@ -35,6 +35,11 @@ export type { AppSettingsSection } from "../../types/settings";
 const SettingsDepth = createContext({ advanced: false, setAdvanced: (_value: boolean) => {}, english: false });
 export type AppSettingsSaveState = "idle" | "saving" | "saved" | "error" | "local-only";
 
+export function SettingsFormDepth({ children, english = false }: { children: ReactNode; english?: boolean }) {
+  const [advanced, setAdvanced] = useState(false);
+  return <SettingsDepth.Provider value={{ advanced, setAdvanced, english }}>{children}</SettingsDepth.Provider>;
+}
+
 const exportFontOptions: Array<[string, string]> = [
   ["Arial", "Arial"],
   ["Calibri", "Calibri"],
@@ -590,16 +595,18 @@ function SummarySettings({
   );
 }
 
-function CapabilitiesSettings({
+export function CapabilitiesSettings({
   ai,
   text,
   onAiChange,
   onReindexImages,
+  embedded = false,
 }: {
   ai: AiConfigStatus;
   text: SettingsCopy;
   onAiChange: (ai: AiConfigStatus) => void;
-  onReindexImages: () => void;
+  onReindexImages?: () => void;
+  embedded?: boolean;
 }) {
   const [localAi, setLocalAi] = useState<AiConfigStatus>(() => normalizeAiStatus(ai));
   const localAiRef = useRef<AiConfigStatus>(normalizeAiStatus(ai));
@@ -707,17 +714,19 @@ function CapabilitiesSettings({
 
   const permissionMode = getPermissionMode(settingsAi.permissions);
 
+  const capabilityTitle = (title: string) => embedded ? title.replace(/^\d+\.\s+/, "") : title;
+
   return (
     <div className="space-y-5">
-      <section className="flex items-start gap-3">
+      {!embedded && <section className="flex items-start gap-3">
         <Wrench size={24} className="mt-1 shrink-0 text-brand-orange" />
         <div className="min-w-0">
           <h3 className="text-[20px] font-semibold text-ink-primary">{text.capabilitiesNav}</h3>
           <p className="mt-2 text-[12px] leading-5 text-ink-secondary">{text.capabilitiesDescription}</p>
         </div>
-      </section>
+      </section>}
 
-      <CapabilitySection icon={<Workflow size={22} />} title={text.capabilityDiagramsTitle} description={text.capabilityDiagramsDescription}>
+      <CapabilitySection icon={<Workflow size={22} />} title={capabilityTitle(text.capabilityDiagramsTitle)} description={text.capabilityDiagramsDescription}>
         <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
           <CapabilityPanel
             icon={<Workflow size={15} />}
@@ -783,7 +792,7 @@ function CapabilitiesSettings({
         </div>
       </CapabilitySection>
 
-      <CapabilitySection icon={<ImageIcon size={22} />} title={text.capabilityImagesTitle} description={text.capabilityImagesDescription}>
+      <CapabilitySection icon={<ImageIcon size={22} />} title={capabilityTitle(text.capabilityImagesTitle)} description={text.capabilityImagesDescription}>
         <div className="grid gap-4 xl:grid-cols-2">
           <CapabilityPanel
             icon={<ImageIcon size={15} />}
@@ -884,19 +893,23 @@ function CapabilitiesSettings({
               <CapabilityToggleRow icon={<Server size={14} />} label={text.visionStoreHeading} description={text.visionStoreDescription} enabled={settingsAi.vision.storeVisualDescriptions} onToggle={() => updateVision({ storeVisualDescriptions: !settingsAi.vision.storeVisualDescriptions })} />
             </div>
 
-            <div className="flex justify-end">
+            {onReindexImages && <div className="flex justify-end">
               <button className="inline-flex h-8 items-center gap-2 rounded-md border border-brand-orange bg-white px-3 text-[11px] font-semibold text-brand-orange hover:bg-brand-hover" type="button" onClick={onReindexImages}>
                 <RefreshCw size={13} />
                 {text.reindexImages}
               </button>
-            </div>
+            </div>}
           </CapabilityPanel>
         </div>
       </CapabilitySection>
 
-      <CapabilitySection icon={<Mic size={22} />} title={text.capabilityAudioTitle} description={text.capabilityAudioDescription} enabled={settingsAi.transcription.enabled} onToggle={() => updateTranscription({ enabled: !settingsAi.transcription.enabled })}>
+      <CapabilitySection icon={<Mic size={22} />} title={capabilityTitle(text.capabilityAudioTitle)} description={text.capabilityAudioDescription} enabled={settingsAi.transcription.enabled} onToggle={() => updateTranscription({ enabled: !settingsAi.transcription.enabled })}>
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.3fr)]">
-          <CapabilityModelCard modelId={settingsAi.transcription.model} name={text.transcriptionModelName} description={text.transcriptionModelDescription} capability={5} cost={4} inputPrice="$0.006" outputPrice="$0.018" tag={text.recommendedModel} />
+          {embedded ? <CapabilityField label={text.transcriptionModelHeading}>
+            <AiModelSelector value={settingsAi.transcription.model} options={catalogOptions("transcription", settingsAi.transcription.model)}
+              onChange={model => updateTranscription({ model })} title={text.transcriptionModelHeading}
+              recommendedOnlyLabel={text.aiModelRecommendedOnly} guideLabel={text.aiModelGuide} guideDescription={text.aiModelGuideDescription} />
+          </CapabilityField> : <CapabilityModelCard modelId={settingsAi.transcription.model} name={text.transcriptionModelName} description={text.transcriptionModelDescription} capability={5} cost={4} inputPrice="$0.006" outputPrice="$0.018" tag={text.recommendedModel} />}
           <div className="grid gap-3 md:grid-cols-2">
             <CapabilitySelect label={text.transcriptionDefaultTarget} value={settingsAi.transcription.defaultTarget} help={text.transcriptionDefaultTargetHelp} onChange={(value) => updateTranscription({ defaultTarget: value as AiConfigStatus["transcription"]["defaultTarget"] })}>
               <option value="prompt">{text.transcriptionTargetPrompt}</option>
@@ -920,7 +933,7 @@ function CapabilitiesSettings({
         </div>
       </CapabilitySection>
 
-      <CapabilitySection icon={<ShieldCheck size={22} />} title={text.capabilityPermissionsTitle} description={text.capabilityPermissionsDescription}>
+      <CapabilitySection icon={<ShieldCheck size={22} />} title={capabilityTitle(text.capabilityPermissionsTitle)} description={text.capabilityPermissionsDescription}>
         <div className="overflow-hidden rounded-md border border-line bg-white">
           <div className="grid border-b border-line md:grid-cols-4">
             <PermissionModeSegment selected={permissionMode === "conservative"} title={text.permissionModeConservative} description={text.permissionModeConservativeDescription} onSelect={() => applyPermissionMode("conservative")} />
@@ -950,7 +963,7 @@ function CapabilitiesSettings({
         <p className="mt-2 text-[10px] leading-4 text-ink-secondary">{text.permissionScopeNotice}</p>
       </CapabilitySection>
 
-      <CapabilitySection icon={<Gauge size={22} />} title={text.capabilityAgenticTitle} description={text.capabilityAgenticDescription}>
+      <CapabilitySection icon={<Gauge size={22} />} title={capabilityTitle(text.capabilityAgenticTitle)} description={text.capabilityAgenticDescription}>
         <div className="overflow-hidden rounded-md border border-line bg-white">
           <div className="grid gap-3 px-3 py-3 md:grid-cols-[minmax(140px,0.45fr)_minmax(220px,1fr)_minmax(220px,1fr)]">
             <LimitField label={text.agenticMaxCost} value={settingsAi.agentic.maxEstimatedCostEur} min={0.1} max={25} step={0.1} onChange={(value) => updateAgentic({ maxEstimatedCostEur: value })} />
@@ -1722,7 +1735,7 @@ function clampSettingsNumber(value: unknown, minimum: number, maximum: number, f
   return Math.min(Math.max(parsed, minimum), maximum);
 }
 
-function AiDocumentalSettings({
+export function AiDocumentalSettings({
   privacyProject,
   onSecurityChanged,
   ai,
@@ -1736,6 +1749,7 @@ function AiDocumentalSettings({
   onDeleteOpenAiKey,
   onRebuildAiIndex,
   onDeleteAiIndex,
+  embedded = false,
 }: {
   privacyProject?:{id:string;name:string}|null;
   onSecurityChanged?:()=>void|Promise<void>;
@@ -1748,9 +1762,10 @@ function AiDocumentalSettings({
   onAiChange: (ai: AiConfigStatus) => void;
   onSaveOpenAiKey: (apiKey: string) => void | Promise<void>;
   onDeleteOpenAiKey: () => void;
-  onRebuildAiIndex: () => void;
-  onReindexImages: () => void;
-  onDeleteAiIndex: () => void;
+  onRebuildAiIndex?: () => void;
+  onReindexImages?: () => void;
+  onDeleteAiIndex?: () => void;
+  embedded?: boolean;
 }) {
   const { english } = useContext(SettingsDepth);
   const keyFieldId=useId(),keyErrorId=useId(),keyHintId=useId();
@@ -1808,13 +1823,17 @@ function AiDocumentalSettings({
     finally{keyPending.current=false;setKeySaving(false);}
   }
 
+  const securitySettings = <>
+    <AiDataPolicyPanel language={english ? "en" : "es"} />
+    <AiPrivacyPanel key={privacyProject?.id ?? "no-project"} project={privacyProject ?? null} english={english} onChanged={onSecurityChanged} />
+    <CredentialSecurityPanel english={english} onChanged={onSecurityChanged} />
+  </>;
+
   return (
     <div className="space-y-5">
-      <SettingsSectionIntro icon={<Brain size={24} />} title={text.aiHeading} description={text.aiDescription} />
+      {!embedded && <SettingsSectionIntro icon={<Brain size={24} />} title={text.aiHeading} description={text.aiDescription} />}
 
-      <AiDataPolicyPanel language={english?"en":"es"}/>
-      <AiPrivacyPanel key={privacyProject?.id??"no-project"} project={privacyProject??null} english={english} onChanged={onSecurityChanged}/>
-      <CredentialSecurityPanel english={english} onChanged={onSecurityChanged}/>
+      {!embedded && securitySettings}
       <SettingsPanel>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -1949,6 +1968,7 @@ function AiDocumentalSettings({
           <div className="min-w-0">
             <h4 className="text-[15px] font-semibold text-ink-primary">{text.ragContextHeading}</h4>
             <p className="mt-1 text-[11px] leading-5 text-ink-secondary">{text.ragAvailableDescription}</p>
+            {embedded && <p className="mt-1 text-xs text-ink-secondary">El índice del espacio de trabajo está pendiente en Proton Drive.</p>}
           </div>
           <Switch enabled={settingsAi.rag.enabled} label={text.ragContextHeading} onToggle={() => updateRag({ enabled: !settingsAi.rag.enabled })} />
         </div>
@@ -1976,7 +1996,8 @@ function AiDocumentalSettings({
                 {aiIndexStatus?.error ?? (aiIndexStatus ? aiIndexStatus.lastIndexedAt : settingsAi.rag.lastIndexedAt) ?? text.ragNotIndexedMessage}
               </p>
             </div>
-            <div className="flex flex-wrap justify-end gap-2">
+            {(onRebuildAiIndex || onDeleteAiIndex) && <div className="flex flex-wrap justify-end gap-2">
+              {onRebuildAiIndex && (
               <button
                 type="button"
                 className="inline-flex min-h-11 items-center gap-2 rounded-md border border-brand-orange bg-white px-3 text-[11px] font-semibold text-brand-orange hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
@@ -1985,7 +2006,8 @@ function AiDocumentalSettings({
               >
                 <RefreshCw size={13} />
                 {text.rebuildAiIndex}
-              </button>
+              </button>)}
+              {onDeleteAiIndex && (
               <button
                 type="button"
                 className="inline-flex min-h-11 items-center gap-2 rounded-md border border-line bg-white px-3 text-[11px] font-semibold text-ink-primary hover:bg-panel disabled:cursor-not-allowed disabled:opacity-50"
@@ -1994,13 +2016,14 @@ function AiDocumentalSettings({
               >
                 <Trash2 size={13} />
                 {text.deleteAiIndex}
-              </button>
-            </div>
+              </button>)}
+            </div>}
           </div>
         </div>
         </AdvancedOptions>
         {failedCount > 0 ? <p className="mt-2 text-[10px] leading-4 text-red-700">{text.ragFailed}: {failedCount}</p> : null}
       </SettingsPanel>
+      {embedded && securitySettings}
     </div>
   );
 }
@@ -2462,18 +2485,20 @@ function AppearanceSettings({
   );
 }
 
-function ExportSettings({
+export function ExportSettings({
   template,
   templatePath,
   text,
   onExportTemplateChange,
   onResetExportTemplate,
+  embedded = false,
 }: {
   template: ExportTemplateConfig;
   templatePath: string;
   text: SettingsCopy;
   onExportTemplateChange: (template: ExportTemplateUpdate) => void;
   onResetExportTemplate: () => void;
+  embedded?: boolean;
 }) {
   const headingLevels = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
   const [draft, setDraft] = useState<ExportTemplateConfig>(() => cloneExportTemplate(template));
@@ -2537,13 +2562,13 @@ function ExportSettings({
 
   return (
     <div className="space-y-5">
-      <section className="flex items-start gap-3">
+      {!embedded && <section className="flex items-start gap-3">
         <Download size={26} className="mt-1 shrink-0 text-brand-orange" />
         <div className="min-w-0">
           <h3 className="text-[20px] font-semibold tracking-normal text-ink-primary">{text.exportNav}</h3>
           <p className="mt-2 text-[12px] leading-5 text-ink-secondary">{text.exportDescription}</p>
         </div>
-      </section>
+      </section>}
 
       <div className="space-y-4">
         <ExportPanel icon={FileText} title={text.exportPageHeading}>

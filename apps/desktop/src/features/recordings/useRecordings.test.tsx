@@ -75,7 +75,7 @@ describe("recording runtime acknowledgements", () => {
     await act(async () => {
       await result.current.command("resume");
     });
-    expect(result.current.error).toContain("Dispositivo desconectado");
+    expect(result.current.error).toContain("No se pudo completar la acción. Comprueba el estado de la grabación.");
     expect(result.current.snapshot?.revision).toBe(2);
     vi.mocked(recordingRequest).mockResolvedValue({
       ...snapshot,

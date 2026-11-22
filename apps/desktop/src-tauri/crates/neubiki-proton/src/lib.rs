@@ -244,8 +244,18 @@ impl Service {
                 | "drive.workspaceList"
                 | "drive.workspaceRead"
                 | "drive.workspaceStat"
+                | "drive.workspaceFileStat"
+                | "drive.workspaceFavoritesRead"
+                | "drive.workspaceFavoritesWrite"
+                | "drive.workspaceProfilesRead"
+                | "drive.workspaceProfilesWrite"
+                | "drive.workspaceFolderStat"
                 | "drive.workspaceAsset"
                 | "drive.workspaceUploadImage"
+                | "drive.workspaceTreeEdit"
+                | "drive.workspaceTrashList"
+                | "drive.workspaceTrashRestore"
+                | "drive.workspaceTrashCheck"
                 | "drive.writeRevision"
                 | "diagnostics.revisionProbe"
                 | "diagnostics.dropRevisionReply"
@@ -296,7 +306,9 @@ impl Service {
                 operation,
                 "account.status" | "drive.root" | "drive.list" | "drive.events" | "drive.readFile"
                     | "drive.workspaceFolder" | "drive.workspaceList" | "drive.workspaceRead"
-                    | "drive.workspaceStat" | "drive.workspaceAsset"
+                    | "drive.workspaceStat" | "drive.workspaceFileStat" | "drive.workspaceAsset" | "drive.workspaceFavoritesRead"
+                    | "drive.workspaceProfilesRead" | "drive.workspaceFolderStat"
+                    | "drive.workspaceTrashList" | "drive.workspaceTrashCheck"
             ) {
                 response = self.call(
                     operation,

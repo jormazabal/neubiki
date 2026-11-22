@@ -244,49 +244,59 @@ impl LocalApi {
             });
         neubiki_proton::Service::new(self.pd_private_root().join("proton-accounts"), library)
     }
-    pub(super) fn proton_accounts(&self, action: &str, payload: Value) -> Result<Value, String> {
+    pub(super) fn proton_accounts(&self, action: &str, payload: Value) -> LocalApiResponse {
+        use super::proton_workspace::Error;
+        let missing_connection = || Error::new(400, "proton-account-connection-required", "Falta el intento de conexión.");
+        let read_failed = || Error::new(503, "proton-account-failed", "No se pudo consultar el estado de la cuenta Proton.");
+        let launch_failed = || Error::new(503, "proton-account-browser-unavailable", "No se pudo abrir el navegador de Proton. Consulta la conexión antes de iniciar otra.").unconfirmed();
+        let after_account_action = |error| Error::from(error).unconfirmed();
         let service = self.pd_service();
-        match action {
-            "status" => service.status().map_err(|e| e.to_string()),
+        let result = (|| match action {
+            "status" => service.status().map_err(Error::from),
             "start" => {
-                let launch = service.start().map_err(|e| e.to_string())?;
+                let launch = service.start().map_err(after_account_action)?;
                 BROWSER
                     .get()
-                    .ok_or("El navegador nativo no está disponible")?(
-                    &launch.sign_in_url
-                )?;
+                    .ok_or_else(launch_failed)?(&launch.sign_in_url)
+                    .map_err(|_| launch_failed())?;
                 Ok(launch.status)
             }
             "poll" => service
                 .poll(
                     payload["connectionId"]
                         .as_str()
-                        .ok_or("Falta el intento de conexión")?,
+                        .ok_or_else(missing_connection)?,
                 )
-                .map_err(|e| e.to_string()),
+                .map_err(after_account_action),
             "cancel" => service
                 .cancel(
                     payload["connectionId"]
                         .as_str()
-                        .ok_or("Falta el intento de conexión")?,
+                        .ok_or_else(missing_connection)?,
                 )
-                .map_err(|e| e.to_string()),
+                .map_err(after_account_action),
             "disconnect" => {
-                let _guard = GATE.lock().map_err(|_| "Sincronización ocupada")?;
-                let account = payload["accountId"].as_str().ok_or("Falta la cuenta")?;
-                let registry = self.registry_checked()?;
+                let _guard = GATE.lock().map_err(|_| read_failed())?;
+                let account = payload["accountId"].as_str().ok_or_else(|| {
+                    Error::new(400, "proton-account-required", "Falta la cuenta Proton.")
+                })?;
+                let registry = self.registry_checked().map_err(|_| read_failed())?;
                 for project in registry["projects"]
                     .as_array()
-                    .ok_or("Registro no disponible")?
+                    .ok_or_else(read_failed)?
                 {
-                    let id = project["id"].as_str().ok_or("Proyecto incompatible")?;
-                    if self.pd_load(id)?["binding"]["accountId"] == account {
-                        return Err("Esta cuenta está asociada a proyectos. Desconecta primero sus sincronizaciones conservando los documentos.".into());
+                    let id = project["id"].as_str().ok_or_else(read_failed)?;
+                    if self.pd_load(id).map_err(|_| read_failed())?["binding"]["accountId"] == account {
+                        return Err(Error::new(409, "proton-account-in-use", "Esta cuenta está asociada a proyectos. Desconecta primero sus sincronizaciones conservando los documentos."));
                     }
                 }
-                service.disconnect(account).map_err(|e| e.to_string())
+                service.disconnect(account).map_err(after_account_action)
             }
-            _ => Err("Acción de cuenta no compatible".into()),
+            _ => Err(Error::new(400, "invalid-proton-request", "Acción de cuenta no compatible.")),
+        })();
+        match result {
+            Ok(body) => LocalApiResponse { status: 200, body },
+            Err(error) => error.response((action != "status").then_some("not-started")),
         }
     }
     pub(super) fn proton_note_local_change(&self, project: &str) -> Result<(), String> {

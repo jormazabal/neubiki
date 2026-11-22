@@ -42,6 +42,26 @@ describe("requestJson", () => {
       detail: "No encontrado",
     });
   });
+
+  it("preserves code, correlation and an unknown outcome in a structured binary error", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    invokeMock.mockResolvedValue({ status: 409, body: {
+      code: "runtime-content-unavailable", operationOutcome: "unknown", operationId: "transfer-receipt",
+    } });
+    await expect(requestBinary("/api/proton/workspace/export/content")).rejects.toMatchObject({
+      status: 409, code: "runtime-content-unavailable", operationOutcome: "unknown", operationId: "transfer-receipt",
+    });
+  });
+
+  it("keeps the explicit result of a structured native rejection", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    invokeMock.mockRejectedValue({
+      status: 500, code: "runtime-request-failed", operationOutcome: "not-applied",
+    });
+    await expect(requestJson("/api/config")).rejects.toMatchObject({
+      status: 500, code: "runtime-request-failed", operationOutcome: "not-applied", operationId: expect.stringMatching(/^operation-/),
+    });
+  });
   it("preserves only an explicit not-started outcome instead of inferring it from an error status",async()=>{
     Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});
     invokeMock.mockResolvedValueOnce({status:409,body:{detail:"Proyecto ocupado",operationOutcome:"not-started"}}).mockResolvedValueOnce({status:409,body:{detail:"Resultado incierto"}});

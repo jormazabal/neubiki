@@ -54,6 +54,31 @@ fn proton_content_change_project(method: &str, raw_path: &str, destination: Opti
     }
 }
 
+#[cfg(test)]
+mod runtime_error_contract {
+    use super::*;
+
+    #[test]
+    fn proton_account_poll_rejects_unbound_requests_with_a_stable_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let api = LocalApi::new(directory.path().to_path_buf(), "test".into(), "desktop".into());
+        let error = api.handle("POST", "/api/proton/accounts/poll", json!({}), vec![]).unwrap();
+        assert_eq!(error.status, 400);
+        assert_eq!(error.body["code"], "proton-account-connection-required");
+        assert_eq!(error.body["operationOutcome"], "not-started");
+    }
+
+    #[test]
+    fn proton_image_proves_invalid_input_did_not_start_provider_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let api = LocalApi::new(directory.path().to_path_buf(), "test".into(), "desktop".into());
+        let error = api.handle("POST", "/api/proton/ai/image", json!({"prompt":""}), vec![]).unwrap();
+        assert_eq!(error.status, 400);
+        assert_eq!(error.body["code"], "proton-ai-input-invalid");
+        assert_eq!(error.body["operationOutcome"], "not-started");
+    }
+}
+
 impl LocalApi {
     pub fn handle(
         &self,
@@ -120,11 +145,57 @@ impl LocalApi {
         self.ai_state_preflight(&segments)?;
         if let ["api","projects",project,"ai","research",..]=segments.as_slice(){ self.research_jobs_checked(project)?; self.ai_research_policy(project)?; }
         match (method.as_str(), segments.as_slice()) {
-            ("POST", ["api", "proton", "workspace", action]) => Ok(self.proton_workspace(action, body)),
-            ("POST", ["api", "proton", "ai", "text"]) => ok(self.proton_ai_text(&body)?),
-            ("POST", ["api", "proton", "ai", "image"]) => ok(self.proton_ai_image(&body)?),
-            ("GET", ["api", "proton", "accounts", "status"]) => ok(self.proton_accounts("status", body)?),
-            ("POST", ["api", "proton", "accounts", action]) if matches!(*action,"start"|"poll"|"cancel"|"disconnect") => ok(self.proton_accounts(action, body)?),
+            ("POST", ["api", "proton", "workspace", action]) => Ok(self.proton_workspace(action, body, &files)),
+            ("POST", ["api", "proton", "ai", "text"]) => match self.proton_ai_text(&body) {
+                Ok(body) => ok(body),
+                Err(failure) => Ok(failure.response()),
+            },
+            ("POST", ["api", "proton", "ai", "dictation"]) => match self.proton_dictate(&body, &files) {
+                Ok(body) => ok(body),
+                Err(failure) => Ok(failure.response()),
+            },
+            ("POST", ["api", "proton", "ai", "research-review"]) => ok(self.proton_prepare_research(&body)?),
+            ("POST", ["api", "proton", "ai", "research-run"]) => ok(self.proton_run_research(&body)?),
+            ("POST", ["api", "proton", "ai", "research-status"]) => ok(self.proton_research_status(&body)?),
+            ("POST", ["api", "proton", "ai", "research-report-delete"]) => ok(self.proton_remove_research_report(&body)?),
+            ("POST", ["api", "proton", "ai", "replacement-suggestion-review"]) => ok(self.proton_review_replacement_suggestion(&body)?),
+            ("POST", ["api", "proton", "ai", "replacement-suggestion-run"]) => ok(self.proton_run_replacement_suggestion(&body)?),
+            ("POST", ["api", "proton", "ai", "semantic-review"]) => ok(self.proton_semantic_review(&body)?),
+            ("POST", ["api", "proton", "ai", "semantic-run"]) => ok(self.proton_semantic_run(&body)?),
+            ("POST", ["api", "proton", "ai", "batch-edit-review"]) => Ok(self.proton_batch_edit("review", &body)),
+            ("POST", ["api", "proton", "ai", "batch-edit-run"]) => Ok(self.proton_batch_edit("run", &body)),
+            ("POST", ["api", "proton", "handwritten", kind @ ("ocr" | "drawing" | "transcription")]) => Ok(self.proton_note_ai(kind, body, &files)),
+            ("POST", ["api", "proton", "packages", "restore", "history"]) => ok(self.proton_restore_receipts(&body)?),
+            ("POST", ["api", "proton", "packages", "restore", action]) => ok(self.proton_package_restore(action, body)?),
+            ("POST", ["api", "proton", "packages", "prepare"]) => dispatch_proton_package(self, body),
+            ("POST", ["api", "proton", "packages", "catalog"]) => ok(self.proton_package_catalog(body)?),
+            ("POST", ["api", "proton", "packages", "backup-schedule"]) => ok(self.proton_backup_schedule(&body)?),
+            ("POST", ["api", "proton", "packages", "backup-schedule-update"]) => ok(self.proton_update_backup_schedule(&body)?),
+            ("POST", ["api", "proton", "packages", "backup-tick"]) => dispatch_proton_backup(self, body),
+            ("POST", ["api", "proton", "export-batches", "catalog"]) => ok(self.proton_export_batch_catalog(body)?),
+            ("POST", ["api", "proton", "export-batches", "prepare"]) => dispatch_proton_export_batch(self, body),
+            ("POST", ["api", "proton", "templates", "source", "prepare"]) => ok(self.prepare_proton_template_capture(body)?),
+            ("POST", ["api", "proton", "templates", "capture"]) => ok(self.capture_proton_template(body)?),
+            ("POST", ["api", "proton", "templates", "capture", "check"]) => ok(self.check_proton_template_capture(body)?),
+            ("POST", ["api", "proton", "templates", "package"]) => ok(self.prepare_proton_template_package(body)?),
+            ("POST", ["api", "proton", "templates", "preview"]) => ok(self.render_proton_document_template(body)?),
+            ("POST", ["api", "proton", "templates", "shared", action]) => ok(self.proton_shared_templates(action, body)?),
+            ("POST", ["api", "proton", "ai", "image"]) => {
+                let mut image = match self.proton_ai_image(&body) {
+                    Ok(image) => image,
+                    Err(failure) => return Ok(failure.response()),
+                };
+                self.retain_proton_ai_image(&body, &mut image);
+                ok(image)
+            }
+            ("GET", ["api", "proton", "ai", "history"]) => ok(self.list_proton_ai_history()?),
+            ("GET", ["api", "proton", "ai", "history", id]) => self.read_proton_ai_history(id),
+            ("DELETE", ["api", "proton", "ai", "history", id]) => self.delete_proton_ai_history(id),
+            ("GET", ["api", "proton", "meetings", id, "summary"]) => ok(self.read_recording_summary(id)?),
+            ("POST", ["api", "proton", "meetings", id, "summary"]) => ok(self.generate_recording_summary(id, body)?),
+            ("PUT", ["api", "proton", "meetings", id, "summary"]) => ok(self.save_recording_summary(id, body)?),
+            ("GET", ["api", "proton", "accounts", "status"]) => Ok(self.proton_accounts("status", body)),
+            ("POST", ["api", "proton", "accounts", action]) if matches!(*action,"start"|"poll"|"cancel"|"disconnect") => Ok(self.proton_accounts(action, body)),
             ("GET", ["api", "projects", p, "proton-direct"]) => ok(self.proton_direct(p,"status",body)?),
             ("GET", ["api", "projects", p, "proton-direct", action]) if matches!(*action,"conflicts"|"storage") => ok(self.proton_direct(p,action,body)?),
             ("GET", ["api", "projects", p, "proton-direct", "migration"]) => ok(self.proton_direct(p,"migration-query",body)?),
@@ -233,6 +304,7 @@ impl LocalApi {
             ("POST", ["api","recovery","upgrades",id,"complete"]) => ok(self.complete_upgrade_recovery(id,body)?),
             ("GET", ["api", "ai", "data-policy"]) => ok(self.ai_data_policy()),
             ("GET", ["api", "storage", "usage"]) => ok(self.storage_usage()?),
+            ("GET", ["api", "proton", "device", "storage"]) => ok(self.proton_device_storage()?),
             ("GET", ["api", "recovery", "storage"]) => ok(self.recovery_storage_inventory()?),
             ("GET", ["api", "recovery", "storage", "quotas"]) => ok(self.recovery_quota_inventory()?),
             ("PUT", ["api", "recovery", "storage", "policy"]) => ok(self.update_recovery_budget(body)?),

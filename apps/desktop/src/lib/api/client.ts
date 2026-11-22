@@ -1,4 +1,4 @@
-import {ApiError} from "./errors";
+import { ApiError, apiErrorFromResponse } from "./errors";
 import {runLocalOperation} from "../runtime/localOperations";
 import { invoke } from "@tauri-apps/api/core";
 import { APP_VERSION } from "../appVersion";
@@ -42,6 +42,7 @@ type LocalApiResponse<T> = {
 
 type LocalApiContentResponse = {
   status: number;
+  body?: unknown;
   contentType: string;
   filename?: string | null;
   dataBase64: string;
@@ -70,7 +71,7 @@ export async function requestJson<T>(path: string, init?: ApiRequestInit): Promi
 export async function requestFormData<T>(path: string, formData: FormData, init?: ApiRequestInit): Promise<T> {
   await initializeApiBaseUrl();
   if (!isTauriRuntime()) {
-    throw new ApiError(503, "Runtime unavailable", `Neubiki ${APP_VERSION} requiere el runtime Tauri local.`);
+    throw new ApiError(503, "Runtime unavailable", `Neubiki ${APP_VERSION} requiere el runtime Tauri local.`, "not-started", "runtime-unavailable");
   }
 
   const files: LocalApiFile[] = [];
@@ -101,8 +102,8 @@ export async function requestBinary(path: string, init?: ApiRequestInit): Promis
       ?await invoke<LocalApiContentResponse>("local_api_content",{request:{method:init?.method??"GET",path,body:parseBody(init?.body)},operationId})
       :await (async()=>{const response=await handleWebDevLocalApiRequest<LocalApiContentResponse>(init?.method??"GET",path,parseBody(init?.body));validateResponse(response);if(response.status>=400)throw apiErrorFromResponse(response.status,response.body);return response.body;})();
     validateResponse(response,native?operationId:undefined);
-    if(response.status>=400)throw new ApiError(response.status,"Local API error");
-    if(typeof response.contentType!=="string"||typeof response.dataBase64!=="string")throw new ApiError(502,"Respuesta incompatible","El runtime no devolvió un contenido válido.","unknown","invalid-runtime-response");
+    if(response.status>=400)throw apiErrorFromResponse(response.status,response.body);
+    if(typeof response.contentType!=="string"||typeof response.dataBase64!=="string")throw new ApiError(502,"Respuesta incompatible","El runtime no devolvió un contenido válido.","unknown","invalid-runtime-response",operationId);
     return base64ToBlob(response.dataBase64,response.contentType);
   },{native,label:"Preparación de archivo",timeoutMs:init?.timeoutMs,signal:init?.signal});
 }
@@ -156,6 +157,8 @@ export function validateRuntimeHealth(health: RuntimeHealth) {
       409,
       "Runtime incompatible",
       `Runtime local incompatible. Esperado version=${APP_VERSION}, profile=${expectedProfile}; detectado ${problems.join(", ")}.`,
+      "not-started",
+      "runtime-incompatible",
     );
   }
 }
@@ -164,13 +167,6 @@ function parseBody(body: BodyInit | null | undefined) {
   if (!body) return null;
   if (typeof body === "string") {try{return JSON.parse(body);}catch{throw new ApiError(400,"Petición inválida","El contenido de la petición no es JSON válido.","not-started","invalid-request-body");}}
   throw new ApiError(400,"Petición inválida","Este tipo de contenido necesita el contrato de importación.","not-started","invalid-request-body");
-}
-
-function apiErrorFromResponse(status: number, body: unknown) {
-  const detail = typeof body === "object" && body && "detail" in body ? (body as { detail?: unknown }).detail : body;
-  const outcome = typeof body === "object" && body && "operationOutcome" in body && body.operationOutcome === "not-started" ? "not-started" : undefined;
-  const code = typeof body === "object" && body && "code" in body && typeof body.code === "string" ? body.code.slice(0,128) : undefined;
-  return new ApiError(status, "Local API error", detail, outcome,code);
 }
 
 async function fileToBase64(file: File) {

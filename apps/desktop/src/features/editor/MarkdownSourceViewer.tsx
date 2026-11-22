@@ -1,22 +1,38 @@
-import type { CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
+
+import { useUiLocale } from "../../lib/i18n/UiLocale";
+import { protonExplorationCopy } from "../protonWorkspace/protonExplorationCopy";
 
 type MarkdownSourceViewerProps = {
   markdown: string;
   zoomPercent: number;
   ariaLabel?: string;
+  lineNumber?: number | null;
 };
 
-export function MarkdownSourceViewer({ markdown, zoomPercent, ariaLabel = "Markdown puro" }: MarkdownSourceViewerProps) {
-  const displayMarkdown = formatMarkdownSourceForDisplay(markdown);
+export function MarkdownSourceViewer({ markdown, zoomPercent, ariaLabel, lineNumber }: MarkdownSourceViewerProps) {
+  const t = protonExplorationCopy[useUiLocale()];
+  const normalized = markdown.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const selected = Number.isInteger(lineNumber) && lineNumber! >= 1 && lineNumber! <= lines.length ? lineNumber! - 1 : null;
+  const line = useRef<HTMLElement>(null);
+  const displayMarkdown = selected === null ? formatMarkdownSourceForDisplay(markdown) : normalized;
+  useEffect(() => {
+    if (selected !== null) { line.current?.scrollIntoView?.({ block: "center" }); line.current?.focus({ preventScroll: true }); }
+  }, [selected, markdown]);
 
   return (
     <div
       className="neubiki-markdown-source-viewer"
       style={{ "--neubiki-markdown-zoom": String(zoomPercent / 100) } as CSSProperties}
-      aria-label={ariaLabel}
+      aria-label={ariaLabel ?? t.markdownSource}
     >
       <pre>
-        <code>{displayMarkdown}</code>
+        <code>{selected === null ? displayMarkdown : <>
+          {lines.slice(0, selected).join("\n")}{selected > 0 ? "\n" : ""}
+          <mark ref={line} tabIndex={-1} aria-label={t.lineLabel(selected + 1)} className="bg-brand-hover text-ink-primary outline-none">{lines[selected] || " "}</mark>
+          {selected < lines.length - 1 ? "\n" : ""}{lines.slice(selected + 1).join("\n")}
+        </>}</code>
       </pre>
     </div>
   );

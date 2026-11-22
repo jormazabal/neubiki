@@ -45,6 +45,7 @@ export function useProtonEditorTools(
       return {
         address: { ...current.address },
         baseRevisionId: current.draft?.baseRevisionId ?? current.document.revisionId,
+        documentName: current.document.node.name,
         editorKey: current.editorKey,
         draftGeneration: current.draft?.generation ?? null,
         markdown: current.markdown,

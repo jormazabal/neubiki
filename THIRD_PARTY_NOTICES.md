@@ -32,3 +32,9 @@ Notable review decisions:
 This file is a practical engineering review, not legal advice. Re-run the
 license review before major dependency upgrades or before commercial
 redistribution under a different policy.
+
+## Bundled Fonts
+
+Neubiki includes Source Sans 3, Atkinson Hyperlegible Next, Noto Serif and
+Noto Sans Mono under the SIL Open Font License 1.1. Their license texts
+are distributed with the application fonts in `apps/desktop/public/fonts`.

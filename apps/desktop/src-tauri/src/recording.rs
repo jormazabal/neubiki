@@ -1,4 +1,4 @@
-use crate::LocalApiState;
+use crate::{runtime_errors::RuntimeFailure, LocalApiState};
 use neubiki_recording::RecordingService;
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
@@ -42,8 +42,10 @@ pub async fn recording_request(
     window: tauri::WebviewWindow,
     action: String,
     payload: Value,
-) -> Result<Value, String> {
-    if !neubiki_core::window_policy::allows_recording_command(window.label()) {return Err("Ventana de grabación no autorizada".into());}
+) -> Result<Value, RuntimeFailure> {
+    if !neubiki_core::window_policy::allows_recording_command(window.label()) {
+        return Err(RuntimeFailure::window_denied());
+    }
     if ![
         "snapshot",
         "transcript",
@@ -70,9 +72,10 @@ pub async fn recording_request(
     ]
     .contains(&action.as_str())
     {
-        return Err("Acción no permitida".into());
+        return Err(RuntimeFailure::rejected(400, "runtime-recording-action-invalid"));
     }
     let notify = !["snapshot", "transcript", "devices", "lease", "release"].contains(&action.as_str());
+    let may_change_state = !["snapshot", "transcript", "devices"].contains(&action.as_str());
     let service = app.state::<RecordingService>().inner().clone();
     let worker_app = app.clone();
     let result=tauri::async_runtime::spawn_blocking(move || {
@@ -89,12 +92,15 @@ pub async fn recording_request(
             let startup=if result["settings"]["startWithWindows"].as_bool().unwrap_or(false){worker_app.autolaunch().enable()}else{worker_app.autolaunch().disable()};
             if startup.is_err(){result=service.request("warning",json!({"message":"Preferencias guardadas; no se ha confirmado el inicio con Windows. Revisa esta opción antes de cambiarla de nuevo."}))?;}
         }
-        if action=="queue" || (action=="stop" && result["sessions"].as_array().is_some_and(|a|a.iter().any(|s|s["id"]==payload["id"] && s["status"]=="ready"))) {
+        if action=="queue" || (action=="stop" && result["sessions"].as_array().is_some_and(|a|a.iter().any(|s|s["id"]==payload["id"] && s["status"]=="ready" && s["meeting"] != true))) {
             if action=="stop" { service.request("queue",payload)?; }
             start_worker(&worker_app);
         }
         Ok::<_,String>(result)
-    }).await.map_err(|e|e.to_string())??;
+    })
+    .await
+    .map_err(|_| RuntimeFailure::service("runtime-recording-failed", may_change_state))?
+    .map_err(|_| RuntimeFailure::service("runtime-recording-failed", may_change_state))?;
     if notify {
         let _ = app.emit("recording-changed", ());
     }
@@ -108,19 +114,22 @@ pub async fn recording_audio(
     id: String,
     start: u64,
     samples: u64,
-) -> Result<String, String> {
-    if !neubiki_core::window_policy::allows_recording_command(window.label()) {return Err("Ventana de grabación no autorizada".into());}
+) -> Result<String, RuntimeFailure> {
+    if !neubiki_core::window_policy::allows_recording_command(window.label()) {
+        return Err(RuntimeFailure::window_denied());
+    }
     let service = app.state::<RecordingService>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         use base64::Engine;
         // IDs are resolved from the manifest; never accept a caller supplied path.
-        let snapshot = service.request("snapshot", json!({}))?;
+        let unavailable = || RuntimeFailure::service("runtime-recording-failed", false);
+        let snapshot = service.request("snapshot", json!({})).map_err(|_| unavailable())?;
         let session = snapshot["sessions"]
             .as_array()
             .and_then(|a| a.iter().find(|s| s["id"] == id))
-            .ok_or("Grabación no encontrada")?;
+            .ok_or_else(|| RuntimeFailure::new(404, "runtime-recording-not-found", None))?;
         if session["audioDeleted"] == true || samples > 24_000 * 30 {
-            return Err("Audio no disponible".into());
+            return Err(RuntimeFailure::new(409, "runtime-recording-audio-unavailable", None));
         }
 
         let count = samples.min(
@@ -129,14 +138,15 @@ pub async fn recording_audio(
                 .unwrap_or(0)
                 .saturating_sub(start),
         );
-        let audio = neubiki_recording::audio::mix(&service.root.join(&id), start, count)?;
+        let audio = neubiki_recording::audio::mix(&service.root.join(&id), start, count)
+            .map_err(|_| unavailable())?;
         Ok(
             base64::engine::general_purpose::STANDARD
                 .encode(neubiki_recording::audio::wav(&audio)),
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|_| RuntimeFailure::service("runtime-recording-failed", false))?
 }
 
 #[cfg(desktop)]

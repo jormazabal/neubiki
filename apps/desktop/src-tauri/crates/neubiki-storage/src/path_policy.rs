@@ -1,9 +1,12 @@
 use std::path::{Component, Path, PathBuf};
 
-fn reserved(name: &std::ffi::OsStr) -> bool {
+pub(super) fn reserved(name: &std::ffi::OsStr) -> bool {
     let name = name.to_string_lossy();
-    let portable = name.trim_end_matches(['.', ' ']);
-    portable.eq_ignore_ascii_case(".git") || portable.eq_ignore_ascii_case(".neubiki-trash") || portable.eq_ignore_ascii_case(".neubiki-runtime") || portable.eq_ignore_ascii_case(".neubiki-mixed-work") || portable.eq_ignore_ascii_case(".neubiki-history-copies") || portable.to_ascii_lowercase().starts_with(".neubiki-history-copies.")
+    let portable = name.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+    matches!(portable.as_str(),
+        ".git" | ".neubiki-trash" | ".neubiki-runtime" | ".neubiki-mixed-work" |
+        ".neubiki-favorites.json" | ".neubiki-export-profiles.json" | ".neubiki-history-copies"
+    ) || portable.starts_with(".neubiki-history-copies.")
 }
 
 /// Validate both the lexical path and the existing ancestor (including links).

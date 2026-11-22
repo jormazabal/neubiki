@@ -363,7 +363,7 @@ pub struct FrozenRecoveryCopy {
 impl FrozenRecoveryCopy {
     pub(crate) fn project_package(filename:String,bytes:Vec<u8>)->Self{Self{filename,bytes,extension:"zip",content_type:"application/zip"}}
     pub(crate) fn markdown(filename:String,bytes:Vec<u8>)->Self{Self{filename,bytes,extension:"md",content_type:"text/markdown"}}
-    pub(crate) fn handwritten(filename:String,bytes:Vec<u8>)->Self{Self{filename,bytes,extension:"knote",content_type:"application/vnd.neubiki.handwritten-note+json"}}
+    pub(crate) fn handwritten(filename:String,bytes:Vec<u8>)->Self{Self{filename,bytes,extension:"nbnote",content_type:"application/vnd.neubiki.handwritten-note+json"}}
     pub fn extension(&self)->&str{self.extension}
     pub fn filename(&self) -> &str {
         &self.filename

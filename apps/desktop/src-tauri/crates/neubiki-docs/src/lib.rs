@@ -3293,6 +3293,8 @@ pub fn write_xlsx(path: &Path, sheet_name: &str, rows: &[Vec<String>]) -> Result
 }
 
 mod bounded_office_text;
+mod office_reference;
+pub use office_reference::{docx_reference_text, xlsx_reference, xlsx_reference_at, xlsx_search_cells};
 mod bounded_pdf_text;
 pub use bounded_pdf_text::{extract_pdf_pages_bounded,extract_pdf_text_bounded,read_pdf_text_bounded};
 pub use bounded_office_text::extract_office_text_bounded;

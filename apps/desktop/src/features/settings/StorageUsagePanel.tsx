@@ -1,7 +1,7 @@
+import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState } from "react";
 import { HardDrive, RefreshCw } from "lucide-react";
 import { getStorageUsage } from "../../lib/api/storageUsage";
-import { getApiErrorMessage } from "../../lib/api/client";
 import type { StorageCategory, StorageUsage } from "../../types/storageUsage";
 import {PreviewCleanupPanel} from "./PreviewCleanupPanel";
 
@@ -30,6 +30,7 @@ function bytes(value: number, english: boolean): string {
 
 /** Measurement and cleanup review are separate explicit user actions. */
 export function StorageUsagePanel({english = false}: {english?: boolean}) {
+  const runtimeErrorMessage = useRuntimeErrorMessage();
   const [usage, setUsage] = useState<StorageUsage | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +49,7 @@ export function StorageUsagePanel({english = false}: {english?: boolean}) {
       const next = await getStorageUsage();
       if (mounted.current) setUsage(next);
     } catch (cause) {
-      if (mounted.current) setError(getApiErrorMessage(cause, english ? "Storage could not be measured. The previous measurement is preserved." : "No se pudo medir el almacenamiento. Se conserva la medición anterior."));
+      if (mounted.current) setError(runtimeErrorMessage(cause, english ? "Storage could not be measured. The previous measurement is preserved." : "No se pudo medir el almacenamiento. Se conserva la medición anterior."));
     } finally {
       inFlight.current = false;
       if (mounted.current) setBusy(false);

@@ -22,6 +22,6 @@ it("keeps an unavailable or mismatched scope distinct from an empty confirmed le
   const{result}=renderHook(()=>useAiUsageScope(summary(null,10)));
   await act(()=>result.current.load({month:"2026-11",projectId:"owned-a"}));
   expect(result.current.summary).toBeNull();expect(result.current.error).toContain("no confirma");
-  await act(()=>result.current.load());expect(result.current.error).toContain("Registro no representable");expect(result.current.summary).toBeNull();
+  await act(()=>result.current.load());expect(result.current.error).toContain("El importe sigue sin confirmar");expect(result.current.summary).toBeNull();
   await act(()=>result.current.load());await waitFor(()=>expect(result.current.summary?.totalEstimatedCost).toBe(0));expect(result.current.error).toBe("");
 });

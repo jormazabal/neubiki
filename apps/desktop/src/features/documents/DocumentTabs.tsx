@@ -498,7 +498,7 @@ function CompactDocumentTabs({
           >
             <ChevronDown size={14} />
           </button>
-          {activeWorkspaceTab.id === activeTabId ? <span className="absolute inset-x-0 bottom-0 h-[2px] bg-brand-orange" /> : null}
+          {activeWorkspaceTab.id === activeTabId ? <span className="neubiki-tab-underline absolute inset-x-0 bottom-0 h-[2px] bg-brand-orange" /> : null}
         </div>
       ) : activeTab ? (
         <div className="min-w-0 flex-1" />
@@ -625,6 +625,7 @@ function WorkspaceTabButton({
   return (
     <button
       aria-label={tab.name}
+      aria-current={active ? "page" : undefined}
       draggable={draggable}
       data-reorderable={draggable ? "true" : undefined}
       data-tab-id={fixed ? undefined : tab.id}
@@ -734,7 +735,7 @@ function WorkspaceTabButton({
         </span>
       )}
       {dropPlacement === "after" ? <span className="absolute bottom-1 right-0 top-1 w-[2px] rounded-full bg-brand-orange" /> : null}
-      {active ? <span className="absolute inset-x-0 bottom-0 h-[2px] bg-brand-orange" /> : null}
+      {active ? <span className="neubiki-tab-underline absolute inset-x-0 bottom-0 h-[2px] bg-brand-orange" /> : null}
     </button>
   );
 }

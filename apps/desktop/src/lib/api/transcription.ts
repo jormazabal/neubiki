@@ -20,7 +20,7 @@ export async function transcribePcmAudio(chunks: ArrayBuffer[], language: AiTran
   });
 }
 
-function pcmChunksToWavFile(chunks: ArrayBuffer[]) {
+export function pcmChunksToWavFile(chunks: ArrayBuffer[]) {
   const sampleRate = 24_000;
   const bytes = concatChunks(chunks);
   const header = new ArrayBuffer(44);

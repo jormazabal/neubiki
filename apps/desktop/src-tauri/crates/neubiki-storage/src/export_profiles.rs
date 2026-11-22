@@ -139,6 +139,15 @@ impl LocalApi {
             None => Ok(None),
         }
     }
+
+    pub(super) fn proton_export_profile(&self, id: &str, expected_revision: &str) -> Result<Profile, String> {
+        let (store, raw) = read(self)?;
+        if raw.as_ref().map(|bytes| sha256_hex(bytes)).as_deref() != Some(expected_revision) {
+            return Err("Los perfiles de exportación cambiaron. Abre Exportar y selecciona de nuevo el perfil.".into());
+        }
+        store.profiles.into_iter().find(|profile| profile.id == id)
+            .ok_or_else(|| "El perfil seleccionado no está disponible.".into())
+    }
 }
 pub(super) fn decorate(name: &str, markdown: &str, profile: &Profile) -> String {
     let mut intro = String::new();

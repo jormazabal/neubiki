@@ -155,7 +155,10 @@ it("keeps a downloaded Windows candidate when protection fails and never install
 });
 it("protects Android before its combined native download and cleans up a synchronous bridge failure",async()=>{
  Object.defineProperty(window,"__TAURI_INTERNALS__",{value:{},configurable:true});Object.defineProperty(window.navigator,"userAgent",{value:"Mozilla/5.0 Android",configurable:true});
- const bridge=createAndroidBridge();window.NeubikiAndroidUpdater=bridge;await checkForUpdate();
- await expect(installUpdate(undefined,async()=>{throw Error("active audio");})).rejects.toThrow("active audio");expect(bridge.downloadAndInstall).not.toHaveBeenCalled();
- const remove=vi.spyOn(window,"removeEventListener");bridge.downloadAndInstall.mockImplementation(()=>{throw Error("native bridge failed");});await expect(installUpdate(undefined,async()=>{})).rejects.toThrow("native bridge failed");expect(remove).toHaveBeenCalledWith("neubiki-android-updater",expect.any(Function));
+ vi.stubEnv("VITE_NEUBIKI_ANDROID_UPDATE_MANIFEST_URL", "https://example.invalid/android-latest.json");
+ try {
+   const bridge=createAndroidBridge();window.NeubikiAndroidUpdater=bridge;await checkForUpdate();
+   await expect(installUpdate(undefined,async()=>{throw Error("active audio");})).rejects.toThrow("active audio");expect(bridge.downloadAndInstall).not.toHaveBeenCalled();
+   const remove=vi.spyOn(window,"removeEventListener");bridge.downloadAndInstall.mockImplementation(()=>{throw Error("native bridge failed");});await expect(installUpdate(undefined,async()=>{})).rejects.toThrow("native bridge failed");expect(remove).toHaveBeenCalledWith("neubiki-android-updater",expect.any(Function));
+ } finally { vi.unstubAllEnvs(); }
 });

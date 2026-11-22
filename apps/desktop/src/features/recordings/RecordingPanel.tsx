@@ -29,20 +29,16 @@ import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {RecordingAudioPlayer} from "./RecordingAudioPlayer";
 import {ModalFrame} from "../../components/ui/ModalFrame";
+import { Button } from "../../components/ui/Button";
+import { StatusTag } from "../../components/ui/StatusTag";
+import { ProgressBar } from "../../components/ui/ProgressBar";
 import {RecordingTranscriptPanel} from "./RecordingTranscriptPanel";
+import type { MeetingPublicationSource } from "../../lib/api/meetingPublication";
+import { useRecordingCopy } from "../../lib/i18n/recordingCopy";
+import { useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 
 const button =
   "inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm hover:bg-brand-hover disabled:opacity-40";
-const statusLabels: Record<RecordingSession["status"], string> = {
-  recording: "Grabando",
-  paused: "En pausa",
-  pendingDestination: "Pendiente de destino",
-  ready: "Lista para transcribir",
-  queued: "En cola",
-  transcribing: "Transcribiendo",
-  attention: "Requiere atención",
-  completed: "Completada",
-};
 export function recordingTime(samples: number) {
   const seconds = Math.floor(samples / 24000);
   return `${Math.floor(seconds / 3600)
@@ -60,6 +56,9 @@ export function RecordingPanel({
   onOpenDocument,
   onOpenSettings,
   onOpenMinutes,
+  meetingMode = false,
+  onOpenSummary,
+  onPublish,
 }: {
   compact?: boolean;
   embedded?: boolean;
@@ -68,10 +67,14 @@ export function RecordingPanel({
   onOpenDocument?: (id: string) => void;
   onOpenSettings?: () => void;
   onOpenMinutes?: (sessionId:string,projectId:string) => void;
+  meetingMode?: boolean;
+  onOpenSummary?: (session: RecordingSession) => void;
+  onPublish?: (source: MeetingPublicationSource) => void;
 }) {
+  const { locale, copy } = useRecordingCopy();
   const { snapshot, error, busy, command } = useRecordings();
   const [startingName, setStartingName] = useState(
-    initialDestination?.name ?? "",
+    meetingMode ? copy.meeting : initialDestination?.name ?? "",
   );
   const [draft, setDraft] = useState<RecordingSettings | null>(null);
   const [devices, setDevices] = useState<RecordingDevice[]>([]);
@@ -90,7 +93,10 @@ export function RecordingPanel({
   const confirmationPending=useRef(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const panelRef = useRef<HTMLElement>(null);
-  const active = snapshot?.sessions.find((s) => s.id === snapshot.captureOwner);
+  const capture = snapshot?.sessions.find((s) => s.id === snapshot.captureOwner);
+  const active = capture && Boolean(capture.meeting) === meetingMode ? capture : undefined;
+  const sessions = snapshot?.sessions.filter(session => Boolean(session.meeting) === meetingMode && session.id !== active?.id) ?? [];
+  if (meetingMode) sessions.sort((first, second) => second.createdAt.localeCompare(first.createdAt));
   const settings = active?.settings ?? draft ?? snapshot?.settings;
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
@@ -114,7 +120,7 @@ export function RecordingPanel({
     if (!active) return;
     const next = await command("stop", { id: active.id });
     const session = next?.sessions.find((s) => s.id === active.id);
-    if (session && !session.destination) setDestination(session);
+    if (session && !session.meeting && !session.destination) setDestination(session);
     setList(true);
   }
   async function openDocument(id: string) {
@@ -137,12 +143,12 @@ export function RecordingPanel({
           aria-expanded={list}
           onClick={() => setList(!list)}
         >
-          {compact ? "Sesiones" : list ? "Ocultar historial" : "Ver grabaciones"} (
-          {(snapshot?.sessions.filter((s) => s.id !== active?.id).length ?? 0)+(snapshot?.unavailableSessions??0)})
+          {compact ? copy.sessions : list ? copy.hideHistory : copy.showHistory} (
+          {sessions.length + (snapshot?.unavailableSessions ?? 0)})
         </button>
         {compact && <>
-          <button className={button} onClick={() => {if(onOpenSettings)onOpenSettings();else void openRecordingWorkspace("settings");}}>Ajustes</button>
-          {!embedded&&<button className={button} onClick={() => void openRecordingWorkspace("recordings")}>Abrir gestor</button>}
+          <button className={button} onClick={() => {if(onOpenSettings)onOpenSettings();else void openRecordingWorkspace("settings");}}>{copy.settings}</button>
+          {!embedded&&<button className={button} onClick={() => void openRecordingWorkspace("recordings")}>{copy.openManager}</button>}
         </>}
         </div>);
   return (
@@ -182,7 +188,7 @@ export function RecordingPanel({
       data-compact={compact}
       data-embedded={embedded}
       className="recording-panel flex h-full max-h-[100dvh] flex-col bg-white text-ink-primary"
-      aria-label="Grabaciones"
+      aria-label={copy.title}
     >
       <header className={compact && !embedded ? "sr-only" : "flex shrink-0 items-center justify-between px-3 py-2"}>
         <h2
@@ -192,12 +198,12 @@ export function RecordingPanel({
           className="flex items-center gap-2 text-lg font-semibold"
         >
           <Mic className="text-brand-orange" size={20} />
-          Grabaciones
+          {copy.title}
         </h2>
         {onClose && (
           <button
             className={button}
-            aria-label="Cerrar grabaciones"
+            aria-label={copy.closePanel}
             onClick={onClose}
           >
             <X size={18} />
@@ -217,25 +223,31 @@ export function RecordingPanel({
             {snapshot.warning}
           </p>
         )}
-        {snapshot?.settingsError&&<p role="alert" className="text-xs leading-5">Las preferencias no están disponibles. Revisa su recuperación en Ajustes; los archivos se conservan.</p>}
-        {!!snapshot?.unavailableSessions&&<p role="status" className="text-xs leading-5">{snapshot.unavailableSessions===1?"Una sesión no se puede abrir.":`${snapshot.unavailableSessions} sesiones no se pueden abrir.`} Sus archivos y audio se conservan.</p>}
+        {snapshot?.settingsError&&<p role="alert" className="text-xs leading-5">{copy.settingsUnavailable}</p>}
+        {!!snapshot?.unavailableSessions&&<p role="status" className="text-xs leading-5">{copy.unavailableSessions(snapshot.unavailableSessions)}</p>}
         </>}
         {settings && (
           <section
             className={compact ? "recording-controls" : "recording-controls space-y-4 rounded-lg border border-line p-4"}
-            aria-label="Controles de grabación"
+            aria-label={copy.controls}
           >
+            {meetingMode && !active && <label className="block text-sm font-semibold">
+              {copy.meetingTitle}
+              <input className="ui-field mt-1" value={startingName} maxLength={150}
+                onChange={event => setStartingName(event.target.value)} disabled={!!busy || Boolean(capture)} />
+            </label>}
+            {meetingMode && capture && !active && <p role="status">{copy.otherCapture}</p>}
             <div className="recording-command-row flex items-center justify-between">
               <span className="text-sm font-semibold" role="status">
                 {busy === "pause"
-                  ? "Pausando…"
+                  ? copy.pausing
                   : busy === "stop"
-                    ? "Finalizando…"
+                    ? copy.stopping
                     : active
-                      ? statusLabels[active.status]
+                      ? copy.statuses[active.status]
                       : snapshot?.preview
-                        ? "Vista previa · No se está grabando"
-                        : snapshot?.settingsError?"Preferencias por revisar":"Preparada"}
+                        ? copy.preview
+                        : snapshot?.settingsError?copy.settingsReview:copy.ready}
               </span>
               <span className="font-mono text-xl tabular-nums">
                 {recordingTime(active?.samples ?? 0)}
@@ -243,27 +255,24 @@ export function RecordingPanel({
             <div className="recording-actions flex flex-wrap gap-2">
               {!active ? (
                 <>
-                  <button
+                  <Button variant="primary"
                     disabled={
                       !!busy ||
                       !!snapshot?.settingsError ||
                       (!settings.microphone && !settings.systemAudio) ||
-                      snapshot?.captureOwner === "dictation"
+                      snapshot?.captureOwner === "dictation" || Boolean(capture) ||
+                      (meetingMode && !startingName.trim())
                     }
-                    className={`${button} border-transparent bg-brand-orange text-white hover:bg-orange-600`}
-                    aria-label="Iniciar grabación"
+                    aria-label={copy.startRecording}
                     onClick={() =>
-                      void command("start", {
-                        settings,
-                        destination: initialDestination
-                          ? { ...initialDestination, name: startingName }
-                          : null,
+                      void command("start", meetingMode ? { settings, meetingTitle: startingName.trim() } : {
+                        settings, destination: initialDestination ? { ...initialDestination, name: startingName } : null,
                       })
                     }
                   >
                     <Mic size={16} />
-                    {compact ? "Iniciar" : "Iniciar grabación"}
-                  </button>
+                    {compact ? copy.start : copy.startRecording}
+                  </Button>
 
                 </>
               ) : (
@@ -285,7 +294,7 @@ export function RecordingPanel({
                     ) : (
                       <Play size={16} />
                     )}{" "}
-                    {active.status === "recording" ? "Pausar" : "Continuar"}
+                    {active.status === "recording" ? copy.pause : copy.resume}
                   </button>
                   <button
                     disabled={!!busy}
@@ -293,7 +302,7 @@ export function RecordingPanel({
                     onClick={() => void stop()}
                   >
                     <Square size={16} />
-                    Parar
+                    {copy.stop}
                   </button>
                 </>
               )}
@@ -319,17 +328,17 @@ export function RecordingPanel({
                       )
                     }
                   >
-                    {snapshot?.preview ? "Terminar prueba" : "Probar niveles"}
+                    {snapshot?.preview ? copy.stopPreview : copy.testLevels}
                   </button></div>}
-            {!isTauriMobileRuntime() && active?.status!=="recording" && <button className="recording-refresh min-h-11 text-xs text-ink-secondary" onClick={()=>{void recordingRequest<RecordingDevice[]>("devices").then(setDevices).catch(()=>undefined);}}>Actualizar dispositivos</button>}
-            <p className="recording-destination flex items-center gap-2 text-xs text-ink-secondary">
+            {!isTauriMobileRuntime() && active?.status!=="recording" && <button className="recording-refresh min-h-11 text-xs text-ink-secondary" onClick={()=>{void recordingRequest<RecordingDevice[]>("devices").then(setDevices).catch(()=>undefined);}}>{copy.refreshDevices}</button>}
+            {!meetingMode && <p className="recording-destination flex items-center gap-2 text-xs text-ink-secondary">
               <FolderOpen size={15} />
               {(active?.destination ?? initialDestination)?.name ??
-                "Elegir carpeta al parar"}
-            </p>
+                copy.chooseOnStop}
+            </p>}
             {!active && initialDestination && (
               <label className="block text-sm">
-                Nombre del documento
+                {copy.documentName}
                 <input
                   className="mt-1 min-h-11 w-full rounded border border-line px-2"
                   value={startingName}
@@ -343,17 +352,15 @@ export function RecordingPanel({
               </p>
             )}
             <details className="recording-details text-xs text-ink-secondary" onToggle={event=>setDetailsOpen(event.currentTarget.open)}>
-              <summary>{compact&&(error||snapshot?.warning||snapshot?.settingsError||snapshot?.unavailableSessions)?<span role="status">{snapshot?.settingsError?"Preferencias por revisar":"Aviso de grabación"} · Detalles</span>:"Audio local · OpenAI al parar y elegir destino · Detalles"}</summary>
+              <summary>{compact&&(error||snapshot?.warning||snapshot?.settingsError||snapshot?.unavailableSessions)?<span role="status">{snapshot?.settingsError?copy.settingsReview:copy.recordingWarning} · {copy.details}</span>:meetingMode ? copy.privateDetails : copy.localDetails}</summary>
               {compact&&<>
                 {error&&<p role="alert">{error}</p>}
                 {snapshot?.warning&&<p role="status">{snapshot.warning}</p>}
-                {snapshot?.settingsError&&<p>Las preferencias no están disponibles. Revisa su recuperación en Ajustes; los archivos se conservan.</p>}
-                {!!snapshot?.unavailableSessions&&<p>{snapshot.unavailableSessions===1?"Una sesión no se puede abrir.":`${snapshot.unavailableSessions} sesiones no se pueden abrir.`} Sus archivos y audio se conservan.</p>}
+                {snapshot?.settingsError&&<p>{copy.settingsUnavailable}</p>}
+                {!!snapshot?.unavailableSessions&&<p>{copy.unavailableSessions(snapshot.unavailableSessions)}</p>}
               </>}
             <p className="text-xs text-ink-secondary">
-              El audio se guarda en este dispositivo. Al parar y elegir destino
-              se enviará a OpenAI para transcribir. Sin identificación de
-              hablantes. El dictado inserta texto en su destino; esta grabación conserva una sesión de audio.
+              {meetingMode ? copy.privateAudio : copy.audioPolicy}
             </p>
             {active && (
               <button
@@ -363,19 +370,18 @@ export function RecordingPanel({
                   setConfirm({ session: active, action: "discard" })
                 }
               >
-                Descartar grabación…
+                {copy.discard}
               </button>
             )}
-              {active?.status === "recording" && <p>Pausa para cambiar dispositivos. Cerrar esta ventana no detiene la grabación.</p>}
+              {active?.status === "recording" && <p>{copy.pauseToChange}</p>}
             </details>
           </section>
         )}
         {!compact&&footer}
         <div id="recording-session-list" className={compact ? "recording-session-list" : ""} hidden={!list}>
-        {list&&!!snapshot?.unavailableSessions&&<p role="status" className="py-2 text-xs leading-5">{snapshot.unavailableSessions===1?"Una sesión no se puede abrir.":`${snapshot.unavailableSessions} sesiones no se pueden abrir.`} Sus archivos y audio se conservan.</p>}
+        {list&&!!snapshot?.unavailableSessions&&<p role="status" className="py-2 text-xs leading-5">{copy.unavailableSessions(snapshot.unavailableSessions)}</p>}
         {list &&
-          snapshot?.sessions
-            .filter((s) => s.id !== active?.id)
+          sessions
             .map((s) => (
               <article
                 key={s.id}
@@ -383,20 +389,24 @@ export function RecordingPanel({
               >
                 <div>
                   <h3 className="font-semibold">
-                    {s.destination?.name ?? "Reunión sin destino"}
+                    {s.destination?.name ?? copy.untitled}
                   </h3>
                   <p className="text-xs text-ink-secondary">
-                    {new Date(s.createdAt).toLocaleString()} ·{" "}
+                    {new Date(s.createdAt).toLocaleString(locale)} ·{" "}
                     {recordingTime(s.samples)} ·{" "}
                     {(s.bytes / 1024 / 1024).toFixed(1)} MiB
                   </p>
                 </div>
-                <p className="text-sm" role="status">
-                  {statusLabels[s.status]}
-                  {s.portableOrigin && " · Archivo portable"}
-                  {s.status === "transcribing" &&
-                    ` · Fragmento ${Math.min(s.chunks.filter((c) => c.status === "completed").length + 1, s.chunks.length)} de ${s.chunks.length}`}
-                </p>
+                <StatusTag role="status" tone={s.status === "completed" ? "success" : s.status === "attention" ? "warning" : "neutral"}
+                  activity={s.status === "transcribing" ? "working" : s.status === "queued" ? "waiting" : undefined}>
+                  {copy.statuses[s.status]}
+                  {s.portableOrigin && ` · ${copy.portable}`}
+                  {s.status === "transcribing" && ` · ${copy.chunk(
+                    Math.min(s.chunks.filter((c) => c.status === "completed").length + 1, s.chunks.length), s.chunks.length
+                  )}`}
+                </StatusTag>
+                {meetingMode && s.status === "transcribing" && <ProgressBar label={copy.transcriptionProgress}
+                  value={s.chunks.length ? 100 * s.chunks.filter(chunk => chunk.status === "completed").length / s.chunks.length : undefined} />}
                 {s.error && (
                   <p className="text-sm text-orange-800">{s.error}</p>
                 )}
@@ -404,7 +414,7 @@ export function RecordingPanel({
                   {!s.audioDeleted && (
                     <button className={button} onClick={() => {setPlayRange(undefined);setPlaying(s);}}>
                       <Volume2 size={16} />
-                      Escuchar
+                      {copy.listen}
                     </button>
                   )}
                   {s.documentId ? (
@@ -412,32 +422,31 @@ export function RecordingPanel({
                       className={button}
                       onClick={() => void openDocument(s.documentId!)}
                     >
-                      Abrir documento
+                      {copy.openDocument}
                     </button>
                   ) : (
                     <>
-                      {!["transcribing", "queued"].includes(s.status) && (
+                      {!meetingMode && !["transcribing", "queued"].includes(s.status) && (
                         <button
                           className={button}
                           onClick={() => setDestination(s)}
                         >
-                          Elegir carpeta
+                          {copy.chooseFolder}
                         </button>
                       )}
                       {s.destination &&
                         !s.audioDeleted &&
-                        !["transcribing", "queued"].includes(s.status) && (
-                          <button
+                        !["transcribing", "queued"].includes(s.status) && (!meetingMode || s.status !== "completed") && (
+                          <Button
                             disabled={!!busy}
-                            className={button}
                             onClick={() =>
-                              s.chunks.some((c) => c.status === "unknown")
+                              meetingMode || s.chunks.some((c) => c.status === "unknown")
                                 ? setConfirm({ session: s, action: "queue" })
                                 : void command("queue", { id: s.id })
                             }
                           >
-                            Transcribir / reintentar
-                          </button>
+                            {meetingMode && s.status !== "attention" ? copy.transcribe : copy.retry}
+                          </Button>
                         )}
                       {["transcribing", "queued"].includes(s.status) && (
                         <button
@@ -446,26 +455,26 @@ export function RecordingPanel({
                             void command("cancel-job", { id: s.id })
                           }
                         >
-                          Detener procesamiento
+                          {copy.cancelJob}
                         </button>
                       )}
                     </>
                   )}
                   {!s.audioDeleted && (
                     <>
-                      <button
+                      {!meetingMode && <button
                         className={button}
                         aria-pressed={s.keep}
                         onClick={() =>
                           void command("keep", { id: s.id, keep: !s.keep })
                         }
                       >
-                        {s.keep ? "Conservada" : "Conservar"}
-                      </button>
+                        {s.keep ? copy.kept : copy.keep}
+                      </button>}
                       <button
                         disabled={["transcribing", "queued"].includes(s.status)}
                         className={button}
-                        aria-label="Eliminar audio"
+                        aria-label={copy.deleteAudio}
                         onClick={() =>
                           setConfirm({ session: s, action: "delete-audio" })
                         }
@@ -475,43 +484,45 @@ export function RecordingPanel({
                     </>
                   )}
                 </div>
-                {!["recording","paused","queued","transcribing"].includes(s.status)&&s.chunks.some(c=>c.status==="completed")&&<div className="flex flex-wrap gap-2"><button className={button} aria-expanded={sourceSession===s.id} onClick={()=>setSourceSession(current=>current===s.id?null:s.id)}>Transcripción y fuentes</button>{(s.destination&&(onOpenMinutes||isTauriRuntime()))&&<button className={button} onClick={()=>void openMinutes(s)}>Acta revisable</button>}</div>}
-                {sourceSession===s.id&&<RecordingTranscriptPanel key={s.id} sessionId={s.id} onListen={segment=>{setPlayRange({start:segment.start,samples:segment.samples});setPlaying(s);}}/>}
+                {!["recording","paused","queued","transcribing"].includes(s.status)&&s.chunks.some(c=>c.status==="completed")&&<div className="flex flex-wrap gap-2"><button className={button} aria-expanded={sourceSession===s.id} onClick={()=>setSourceSession(current=>current===s.id?null:s.id)}>{copy.transcript}</button>{meetingMode
+                  ? <Button variant="primary" onClick={() => onOpenSummary?.(s)}>{copy.meetingSummary}</Button>
+                  : (s.destination&&(onOpenMinutes||isTauriRuntime()))&&<button className={button} onClick={()=>void openMinutes(s)}>{copy.minutes}</button>}</div>}
+                {sourceSession===s.id&&<RecordingTranscriptPanel key={s.id} sessionId={s.id} onPublish={meetingMode ? onPublish : undefined}
+                  onListen={segment=>{setPlayRange({start:segment.start,samples:segment.samples});setPlaying(s);}}/>}
                 {s.documentId && (
                   <p className="break-all text-xs">
-                    Documento: {s.documentId.split("::").pop()}
+                    {copy.document} · {s.documentId.split("::").pop()}
                   </p>
                 )}
                 {s.cost && (
                   <details className="text-xs text-ink-secondary">
                     <summary>
-                      Estimación:{" "}
+                      {copy.estimate} ·{" "}
                       {s.cost.estimatedCostEur === null
-                        ? `${s.cost.estimatedCostUsd.toFixed(4)} USD · EUR no disponible`
+                        ? `${s.cost.estimatedCostUsd.toFixed(4)} USD · ${copy.eurUnavailable}`
                         : `${s.cost.estimatedCostEur.toFixed(4)} €`}
                     </summary>
                     <p>
                       {s.cost.estimatedCostUsd.toFixed(4)} USD · 1 EUR ={" "}
-                      {s.cost.exchangeRate.usdPerEur ?? "—"} USD · Referencia{" "}
-                      {s.cost.exchangeRate.date ?? "no disponible"}.{" "}
+                      {s.cost.exchangeRate.usdPerEur ?? "—"} USD · {copy.reference}{" "}
+                      {s.cost.exchangeRate.date ?? copy.unavailable}.{" "}
                       {s.cost.exchangeRate.date &&
                       Date.now() - Date.parse(s.cost.exchangeRate.date) >
                         7 * 86400000
-                        ? "Referencia de más de siete días."
+                        ? copy.staleRate
                         : ""}{" "}
-                      Los reintentos de resultado desconocido pueden añadir
-                      consumo.
+                      {copy.retryCost}
                     </p>
                   </details>
                 )}
                 <p className="text-xs text-ink-secondary">
                   {s.audioDeleted
-                    ? "Audio eliminado. El documento se conserva."
-                    : s.keep ||
+                    ? meetingMode ? copy.meetingDeleted : copy.documentRetained
+                    : meetingMode || s.keep ||
                         !s.completedAt ||
                         s.settings.retentionDays === null
-                      ? "Sin borrado automático"
-                      : `Borrado local a partir del ${new Date((s.completedAt + s.settings.retentionDays * 86400) * 1000).toLocaleString()}`}
+                      ? copy.noDeletion
+                      : copy.deletion(new Date((s.completedAt + s.settings.retentionDays * 86400) * 1000).toLocaleString(locale))}
                 </p>
               </article>
             ))}
@@ -540,14 +551,15 @@ export function RecordingPanel({
         <RecordingAudioPlayer session={playing} range={playRange} onClose={() => setPlaying(null)} />
       )}
       {confirm && (
-        <ModalFrame label="Confirmar acción" role="alertdialog" className="!z-[150] [&_button]:!min-h-11 [&_select]:!min-h-11 [&_input]:!min-h-11" fallbackFocus={()=>titleRef.current} onClose={()=>{if(!confirmationPending.current)setConfirm(null);}}>
+        <ModalFrame label={copy.confirmAction} role="alertdialog" className="!z-[150] [&_button]:!min-h-11 [&_select]:!min-h-11 [&_input]:!min-h-11" fallbackFocus={()=>titleRef.current} onClose={()=>{if(!confirmationPending.current)setConfirm(null);}}>
           <section
             className="max-h-[calc(100dvh-24px)] w-full max-w-md space-y-4 overflow-y-auto rounded-lg bg-white p-4 text-sm [overflow-wrap:anywhere]"
           >
             <p>
-              {confirm.action === "queue"
-                ? "El resultado del envío anterior no está confirmado. Reintentar puede repetir el consumo en OpenAI."
-                : "Eliminar el audio local es irreversible. El documento Markdown se conservará."}
+              {confirm.action === "queue" && (confirm.session.chunks.some(chunk => chunk.status === "unknown")
+                ? copy.confirmRetry
+                : copy.confirmSend)}
+              {confirm.action !== "queue" && (meetingMode ? copy.confirmMeetingDeletion : copy.confirmDeletion)}
             </p>
             <div className="flex gap-2">
               <button
@@ -556,7 +568,7 @@ export function RecordingPanel({
                 className={button}
                 onClick={() => {if(!confirmationPending.current)setConfirm(null);}}
               >
-                Cancelar
+                {copy.cancel}
               </button>
               <button
                 className={button}
@@ -571,7 +583,7 @@ export function RecordingPanel({
                   } finally {confirmationPending.current=false;setConfirming(false);}
                 }}
               >
-                Confirmar
+                {copy.confirm}
               </button>
             </div>
           </section>
@@ -599,6 +611,7 @@ export function AudioInputs({
   recording: boolean;
   onChange: (s: RecordingSettings) => void;
 }) {
+  const { copy } = useRecordingCopy();
   return (
       <div className={compact ? "recording-inputs" : "space-y-3"}>
       {([0, 1] as const)
@@ -606,7 +619,7 @@ export function AudioInputs({
         .map((index) => {
           const enabled =
             index === 0 ? settings.microphone : settings.systemAudio;
-          const name = index === 0 ? "Micrófono" : "Audio de aplicaciones";
+          const name = index === 0 ? copy.microphone : copy.systemAudio;
           const field = index === 0 ? "microphoneDevice" : "outputDevice";
           const level = signalState === "live" && enabled ? Math.max(0, Math.min(100, Math.round(levels[index] * 100))) : 0;
           return (
@@ -630,7 +643,7 @@ export function AudioInputs({
                 />
               </label>
               <select
-                aria-label={`Dispositivo de ${name}`}
+                aria-label={copy.device(name)}
                 value={settings[field] ?? ""}
                 disabled={disabled || recording}
                 className="min-h-11 w-full rounded border border-line bg-white px-2 text-sm"
@@ -638,7 +651,7 @@ export function AudioInputs({
                   onChange({ ...settings, [field]: e.target.value || null })
                 }
               >
-                <option value="">Predeterminado del sistema</option>
+                <option value="">{copy.defaultDevice}</option>
                 {devices
                   .filter(
                     (d) => d.kind === (index === 0 ? "microphone" : "system"),
@@ -652,11 +665,11 @@ export function AudioInputs({
               <div
                 className="recording-meter mt-2 flex items-center gap-2"
                 role="meter"
-                aria-label={`Nivel de ${name}`}
+                aria-label={copy.level(name)}
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={level}
-                aria-valuetext={!enabled ? "Desactivado" : signalState === "paused" ? "En pausa" : signalState === "untested" ? "Sin probar" : `${level} %`}
+                aria-valuetext={!enabled ? copy.disabled : signalState === "paused" ? copy.statuses.paused : signalState === "untested" ? copy.untested : `${level} %`}
               >
                 <div aria-hidden="true" className="flex flex-1 gap-1">
                   {Array.from({ length: compact ? 8 : 16 }, (_, i) => (
@@ -668,11 +681,11 @@ export function AudioInputs({
                 </div>
                 <span className="min-w-16 text-xs text-ink-secondary">
                   {!enabled
-                    ? "Desactivado"
-                    : signalState !== "live" ? (compact ? "—" : signalState === "paused" ? "En pausa" : "Sin probar")
+                    ? copy.disabled
+                    : signalState !== "live" ? (compact ? "—" : signalState === "paused" ? copy.statuses.paused : copy.untested)
                     : level
                       ? `${level} %`
-                      : "Sin señal"}
+                      : copy.noSignal}
                 </span>
               </div>
             </div>
@@ -707,21 +720,24 @@ function DestinationDialog({
   operationError?:string|null;
   fallbackFocus?:()=>HTMLElement|null;
 }) {
+  const { copy } = useRecordingCopy();
+  const runtimeErrorMessage = useRuntimeErrorMessage();
   const [projects, setProjects] = useState<Project[]>([]);
   const [tree, setTree] = useState<DocumentTreeNode[]>([]);
   const [project, setProject] = useState(session.destination?.projectId ?? "");
   const [folder, setFolder] = useState(session.destination?.folderId ?? "");
   const [name, setName] = useState(
     session.destination?.name ??
-      `Reunión ${session.createdAt.slice(0, 16).replace(/:/g, "-")}.md`,
+      `${copy.meeting} ${session.createdAt.slice(0, 16).replace(/:/g, "-")}.md`,
   );
-  const [error, setError] = useState("");
+  const [issue, setIssue] = useState<{ cause: unknown } | null>(null);
+  const error = issue ? runtimeErrorMessage(issue.cause, copy.destinationFailed) : null;
   const [saving, setSaving] = useState(false);
   const savePending=useRef(false);
   useEffect(() => {
     void listProjects()
       .then(setProjects)
-      .catch((e) => setError(String(e)));
+      .catch((cause) => setIssue({ cause }));
   }, []);
   useEffect(() => {
     let live = true;
@@ -731,37 +747,37 @@ function DestinationDialog({
         .then((t) => {
           if (live) setTree(t);
         })
-        .catch((e) => {if(live)setError(String(e));});
+        .catch((cause) => {if(live)setIssue({ cause });});
     return () => {
       live = false;
     };
   }, [project]);
   return (
-    <ModalFrame label="Destino de la transcripción" className="!z-[150] [&_button]:!min-h-11 [&_select]:!min-h-11 [&_input]:!min-h-11" fallbackFocus={fallbackFocus} onClose={()=>{if(!savePending.current)onCancel();}}>
+    <ModalFrame label={copy.destination} className="!z-[150] [&_button]:!min-h-11 [&_select]:!min-h-11 [&_input]:!min-h-11" fallbackFocus={fallbackFocus} onClose={()=>{if(!savePending.current)onCancel();}}>
       <form
         className="flex max-h-[calc(100dvh-24px)] w-full min-w-0 max-w-md flex-col overflow-hidden rounded-lg bg-white"
         onSubmit={async (e) => {
           e.preventDefault();
           if(savePending.current)return;
           (e.currentTarget.closest('[role="dialog"]') as HTMLElement|null)?.focus({preventScroll:true});
-          savePending.current=true;setSaving(true);setError("");
+          savePending.current=true;setSaving(true);setIssue(null);
           try {
             await onSave({
               projectId: project,
               folderId: folder || null,
               name,
             });
-          } catch(failure) {setError(String(failure));} finally {
+          } catch(cause) {setIssue({ cause });} finally {
             savePending.current=false;setSaving(false);
           }
         }}
       >
-        <header className="shrink-0 px-4 pt-4 pb-2"><h3 className="font-semibold">Guardar transcripción en un proyecto</h3>
-        <p className="mt-1 text-sm">La grabación está guardada. Cancelar la deja pendiente.</p></header>
+        <header className="shrink-0 px-4 pt-4 pb-2"><h3 className="font-semibold">{copy.saveTranscript}</h3>
+        <p className="mt-1 text-sm">{copy.recordingSaved}</p></header>
         <div className="min-h-0 space-y-3 overflow-y-auto px-4 py-2 [overflow-wrap:anywhere]">
         {(error||operationError) && <p role="alert" className="text-sm text-red-700">{error||operationError}</p>}
         <label className="block text-sm">
-          Proyecto
+          {copy.project}
           <select
             data-autofocus
             disabled={saving}
@@ -773,7 +789,7 @@ function DestinationDialog({
             }}
             className="mt-1 min-h-11 w-full rounded border border-line bg-white px-2"
           >
-            <option value="">Selecciona un proyecto</option>
+            <option value="">{copy.chooseProject}</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -783,7 +799,7 @@ function DestinationDialog({
         </label>
         {!projects.length && (
           <p className="text-sm">
-            El audio se conservará hasta que elijas un destino.
+            {copy.audioRetained}
             <button
               type="button"
               disabled={saving}
@@ -796,19 +812,19 @@ function DestinationDialog({
                 onCancel();
               }}
             >
-              Crear proyecto…
+              {copy.createProject}
             </button>
           </p>
         )}
         <label className="block text-sm">
-          Carpeta
+          {copy.folder}
           <select
             disabled={saving}
             value={folder}
             onChange={(e) => setFolder(e.target.value)}
             className="mt-1 min-h-11 w-full rounded border border-line bg-white px-2"
           >
-            <option value="">Raíz del proyecto</option>
+            <option value="">{copy.projectRoot}</option>
             {folders(tree).map((f) => (
               <option key={f.id} value={f.id}>
                 {f.label}
@@ -817,7 +833,7 @@ function DestinationDialog({
           </select>
         </label>
         <label className="block text-sm">
-          Nombre
+          {copy.name}
           <input
             required
             maxLength={150}
@@ -830,13 +846,13 @@ function DestinationDialog({
         </div>
         <footer className="flex shrink-0 flex-wrap gap-2 px-4 py-3 [&>button]:min-w-0 [&>button]:flex-1">
           <button type="button" disabled={saving} className={button} onClick={()=>{if(!savePending.current)onCancel();}}>
-            Cancelar
+            {copy.cancel}
           </button>
           <button
             disabled={saving || !project}
             className={`${button} bg-brand-orange text-white`}
           >
-            {saving ? "Guardando…" : "Transcribir y guardar"}
+            {saving ? copy.saving : copy.transcribeSave}
           </button>
         </footer>
       </form>

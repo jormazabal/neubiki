@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const MEETING_USAGE_SCOPE: &str = "neubiki-private-meetings";
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
@@ -69,6 +71,8 @@ pub struct Chunk {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Session {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub meeting: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub portable_origin: Option<neubiki_core::recording_portability::PortableRecordingOrigin>,
     pub id: String,
@@ -92,6 +96,7 @@ pub struct Session {
 impl Session {
     pub fn new(settings: Settings, destination: Option<Destination>) -> Self {
         Self {
+            meeting: false,
             portable_origin: None,
             id: uuid::Uuid::new_v4().to_string(),
             revision: 1,

@@ -211,9 +211,11 @@ function routeRequest(
   if (matches(segments, ["api", "config"])) {
     if (method === "GET") return ok(state.config);
     if (method === "PUT") {
+      const patch = asObject(body);
       state.config = {
         ...state.config,
-        ...asObject(body),
+        ...patch,
+        appearance: { ...state.config.appearance, ...asObject(patch.appearance) },
         updatedAt: nowIso(),
       };
       return ok(state.config);

@@ -4,14 +4,17 @@ import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
 import {PreviewStatusState} from "./PreviewStatusState";
 import {useElementSize} from "./useElementSize";
 import type {PdfReadingPosition} from "./previewReadingMemory";
+import { useUiLocale } from "../../lib/i18n/UiLocale";
+import { protonExplorationCopy } from "../protonWorkspace/protonExplorationCopy";
 import { rasterRatio } from "./pdfViewport";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc=pdfWorkerUrl;
 type PdfSearchHighlight={id:string;left:number;top:number;width:number;height:number};
 
-export type PdfPreviewSurfaceProps = {url:string;query:string;zoomPercent:number;fitMode:"width"|"page"|null;pageNumber:number;navigationSequence:number;onPageChange:(page:number)=>void;onPageCountChange:(count:number|null)=>void;onSearchCountChange:(count:number|null)=>void;readingPosition?:PdfReadingPosition|null;onReadingPositionChange?:(position:PdfReadingPosition)=>void};
+export type PdfPreviewSurfaceProps = {url:string;query:string;zoomPercent:number;fitMode:"width"|"page"|null;pageNumber:number;navigationSequence:number;onPageChange:(page:number)=>void;onPageCountChange:(count:number|null)=>void;onSearchCountChange:(count:number|null)=>void;readingPosition?:PdfReadingPosition|null;onReadingPositionChange?:(position:PdfReadingPosition)=>void;singlePage?:boolean};
 
-export function PdfPreviewSurface({url,query,zoomPercent,fitMode,pageNumber,navigationSequence,onPageChange,onPageCountChange,onSearchCountChange,readingPosition,onReadingPositionChange}:PdfPreviewSurfaceProps) {
+export function PdfPreviewSurface({url,query,zoomPercent,fitMode,pageNumber,navigationSequence,onPageChange,onPageCountChange,onSearchCountChange,readingPosition,onReadingPositionChange,singlePage=false}:PdfPreviewSurfaceProps) {
+  const t = protonExplorationCopy[useUiLocale()];
   const [containerRef,size] = useElementSize<HTMLDivElement>();
   const [pdf,setPdf] = useState<pdfjsLib.PDFDocumentProxy|null>(null);
   const [error,setError] = useState<string|null>(null);
@@ -30,10 +33,11 @@ export function PdfPreviewSurface({url,query,zoomPercent,fitMode,pageNumber,navi
   const reportMatches=useCallback((page:number,count:number|null)=>{
     matchCounts.current.set(page,count);
     const counts=[...matchCounts.current.values()];
-    onSearchCountChange(pdf && counts.length===pdf.numPages && counts.every(n=>n!==null) ?
+    onSearchCountChange(pdf && counts.length===(singlePage?1:pdf.numPages) && counts.every(n=>n!==null) ?
       counts.reduce<number>((sum,n)=>sum+(n??0),0) : null);
-  },[pdf,query,onSearchCountChange]);
-  useEffect(()=>{matchCounts.current.clear();onSearchCountChange(null);},[pdf,query,onSearchCountChange]);
+  },[pdf,query,onSearchCountChange,singlePage]);
+  const visiblePage=singlePage?pageNumber:undefined;
+  useEffect(()=>{matchCounts.current.clear();onSearchCountChange(null);},[pdf,query,visiblePage,onSearchCountChange]);
   useEffect(()=>{
     let cancelled=false;
     setPdf(null);setError(null);onPageCountChange(null);
@@ -42,18 +46,18 @@ export function PdfPreviewSurface({url,query,zoomPercent,fitMode,pageNumber,navi
       if(cancelled)return;
       if(!Number.isSafeInteger(document.numPages)||document.numPages<1)throw new Error("PDF sin páginas válidas");
       setPdf(document);onPageCountChange(document.numPages);
-    }).catch(()=>{if(!cancelled)setError("No se pudo renderizar el PDF. Puedes actualizar la vista o abrir el original externamente.");});
+    }).catch(()=>{if(!cancelled)setError(singlePage?"Puedes volver a leer el archivo en Proton.":"No se pudo renderizar el PDF. Puedes actualizar la vista o abrir el original externamente.");});
     return ()=>{cancelled=true;void loadingTask.destroy().catch(()=>{});};
-  },[url,onPageCountChange]);
+  },[url,onPageCountChange,singlePage]);
   const restorePosition=useCallback(()=>{
     if(!restorationNeeded.current || latestGeometry.current!==geometry || positionFrame.current!==undefined || !pdf)return;
     const target=Math.max(1,Math.min(currentPage.current,pdf.numPages));
-    for(let number=1;number<=target;number++)if(!geometry.pages.has(number))return;
+    for(let number=singlePage?target:1;number<=target;number++)if(!geometry.pages.has(number))return;
     positionFrame.current=requestAnimationFrame(()=>{
       positionFrame.current=undefined;
       if(latestGeometry.current!==geometry)return;
       const target=Math.max(1,Math.min(currentPage.current,pdf.numPages));
-      for(let number=1;number<=target;number++)if(!geometry.pages.has(number))return;
+      for(let number=singlePage?target:1;number<=target;number++)if(!geometry.pages.has(number))return;
       const page=containerRef.current?.querySelector(`[data-pdf-page="${target}"]`);
       if(page instanceof HTMLElement){
         page.scrollIntoView({block:"start",behavior:"auto"});
@@ -67,7 +71,7 @@ export function PdfPreviewSurface({url,query,zoomPercent,fitMode,pageNumber,navi
       restorationNeeded.current=false;
       releaseFrame.current=requestAnimationFrame(()=>{restoringPosition.current=false;});
     });
-  },[geometry,pdf,containerRef]);
+  },[geometry,pdf,containerRef,singlePage]);
   useLayoutEffect(()=>{
     latestGeometry.current=geometry;
     restorationNeeded.current=true;restoringPosition.current=true;
@@ -106,10 +110,10 @@ export function PdfPreviewSurface({url,query,zoomPercent,fitMode,pageNumber,navi
   // This surface remains mounted during loading: its observer sees the first
   // real panel dimensions before any page canvas is created.
   return <div ref={containerRef} onScroll={trackReadingPosition} className="h-full min-h-0 min-w-0 overflow-auto bg-panel/60 px-4 py-4" data-testid="pdf-scroll-surface">
-    {error ? <PreviewStatusState title="No se pudo renderizar el PDF" message={error}/> : !pdf || !size.width || !size.height ?
-      <PreviewStatusState title="Preparando páginas" message="PDF.js está cargando el documento."/> :
+    {error ? <PreviewStatusState title={t.pdfRenderTitle} message={singlePage ? t.pdfReread : t.pdfExternalHelp}/> : !pdf || !size.width || !size.height ?
+      <PreviewStatusState title={t.pdfPreparingPages} message={t.pdfLoadingDocument}/> :
       <div className="mx-auto flex w-fit flex-col gap-4">
-        {Array.from({length:pdf.numPages},(_,index)=><PdfPageCanvas key={index+1} pdf={pdf} pageNumber={index+1} minimumHeight={index===pdf.numPages-1?Math.max(0,size.height-32):0} containerWidth={size.width} containerHeight={Math.max(1,size.height-24)} query={query} zoomPercent={zoomPercent} fitMode={fitMode} onMatches={reportMatches} onLayout={reportLayout}/>)}
+        {(singlePage ? [Math.min(Math.max(1,pageNumber),pdf.numPages)] : Array.from({length:pdf.numPages},(_,index)=>index+1)).map(page=><PdfPageCanvas key={page} pdf={pdf} pageNumber={page} minimumHeight={singlePage||page===pdf.numPages?Math.max(0,size.height-32):0} containerWidth={size.width} containerHeight={Math.max(1,size.height-24)} query={query} zoomPercent={zoomPercent} fitMode={fitMode} onMatches={reportMatches} onLayout={reportLayout}/>)}
       </div>}
   </div>;
 }
@@ -137,6 +141,7 @@ function PdfPageCanvas({
   onMatches: (page:number,count:number|null)=>void;
   onLayout: (page:number)=>void;
 }) {
+  const t = protonExplorationCopy[useUiLocale()];
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
   const [highlights, setHighlights] = useState<PdfSearchHighlight[]>([]);
@@ -230,7 +235,7 @@ function PdfPageCanvas({
 
   return (
     <div data-pdf-page={pageNumber} className="scroll-mt-3" style={{minHeight:minimumHeight}}>
-      <div className="mb-1 px-1 text-[10px] font-semibold text-ink-secondary">Página {pageNumber}</div>
+      <div className="mb-1 px-1 text-[10px] font-semibold text-ink-secondary">{t.pdfPageLabel(pageNumber)}</div>
       <div className="relative w-fit bg-white shadow-subtle ring-1 ring-line">
         <canvas ref={canvasRef} className="block bg-white" />
         {highlights.length ? (
@@ -250,7 +255,7 @@ function PdfPageCanvas({
           </div>
         ) : null}
       </div>
-      {renderError ? <p className="py-2 text-center text-[10px] text-red-700">No se pudo renderizar esta página.</p> : null}
+      {renderError ? <p className="py-2 text-center text-[10px] text-red-700">{t.pageRenderError}</p> : null}
     </div>
   );
 }

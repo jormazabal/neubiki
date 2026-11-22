@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 type TooltipState = {
   text: string;
@@ -6,6 +6,7 @@ type TooltipState = {
   anchorLeft: number;
   anchorTop: number;
   anchorBottom: number;
+  colors: CSSProperties;
 };
 
 type TooltipLayout = {
@@ -25,6 +26,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export function GlobalTooltip() {
+  const tooltipId = useId();
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [layout, setLayout] = useState<TooltipLayout | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
@@ -64,9 +66,20 @@ export function GlobalTooltip() {
       if (suppressedElement === element) return;
       const text = element.dataset.tooltip;
       if (!text) return;
+      if (!element.isConnected) { hideTooltip(); return; }
+      if (activeElement !== element) hideTooltip();
       const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const context = getComputedStyle(element);
+      const colors = {
+        "--tooltip-bg": context.getPropertyValue("--tooltip-bg"),
+        "--tooltip-text": context.getPropertyValue("--tooltip-text"),
+        "--tooltip-border": context.getPropertyValue("--tooltip-border"),
+      } as CSSProperties;
       const preferredPlacement = element.dataset.tooltipPlacement === "bottom" ? "bottom" : "top";
       activeElement = element;
+      const descriptions = element.getAttribute("aria-describedby")?.split(/\s+/).filter(Boolean) ?? [];
+      if (!descriptions.includes(tooltipId)) element.setAttribute("aria-describedby", [...descriptions, tooltipId].join(" "));
       setLayout(null);
       setTooltip({
         text,
@@ -74,11 +87,17 @@ export function GlobalTooltip() {
         anchorLeft: rect.left + rect.width / 2,
         anchorTop: rect.top,
         anchorBottom: rect.bottom,
+        colors,
       });
     }
 
     function hideTooltip(element?: HTMLElement | null) {
       if (element && activeElement && element !== activeElement) return;
+      if (activeElement) {
+        const descriptions = activeElement.getAttribute("aria-describedby")?.split(/\s+/).filter(value => value && value !== tooltipId) ?? [];
+        if (descriptions.length) activeElement.setAttribute("aria-describedby", descriptions.join(" "));
+        else activeElement.removeAttribute("aria-describedby");
+      }
       activeElement = null;
       setTooltip(null);
       setLayout(null);
@@ -89,12 +108,13 @@ export function GlobalTooltip() {
       hideTooltip(element);
     }
 
-    function handleMouseOver(event: MouseEvent) {
+    function handleMouseOver(event: PointerEvent) {
+      if (event.pointerType === "touch") return;
       const element = resolveTooltipElement(event.target);
       if (element) showTooltip(element);
     }
 
-    function handleMouseOut(event: MouseEvent) {
+    function handleMouseOut(event: PointerEvent) {
       const element = resolveTooltipElement(event.target);
       if (!element) return;
       const nextTarget = event.relatedTarget instanceof Element ? event.relatedTarget : null;
@@ -129,6 +149,7 @@ export function GlobalTooltip() {
     }
 
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && activeElement) { suppressTooltip(activeElement); return; }
       if (event.key !== "Enter" && event.key !== " ") return;
       const element = resolveTooltipElement(event.target);
       if (element) suppressTooltip(element);
@@ -141,8 +162,8 @@ export function GlobalTooltip() {
     document.addEventListener("pointerdown", handlePointerDown, true);
     document.addEventListener("click", handleClick, true);
     document.addEventListener("keydown", handleKeyDown, true);
-    document.addEventListener("mouseover", handleMouseOver);
-    document.addEventListener("mouseout", handleMouseOut);
+    document.addEventListener("pointerover", handleMouseOver);
+    document.addEventListener("pointerout", handleMouseOut);
     document.addEventListener("focusin", handleFocusIn);
     document.addEventListener("focusout", handleFocusOut);
     window.addEventListener("scroll", handleViewportChange, true);
@@ -151,22 +172,24 @@ export function GlobalTooltip() {
       document.removeEventListener("pointerdown", handlePointerDown, true);
       document.removeEventListener("click", handleClick, true);
       document.removeEventListener("keydown", handleKeyDown, true);
-      document.removeEventListener("mouseover", handleMouseOver);
-      document.removeEventListener("mouseout", handleMouseOut);
+      document.removeEventListener("pointerover", handleMouseOver);
+      document.removeEventListener("pointerout", handleMouseOut);
       document.removeEventListener("focusin", handleFocusIn);
       document.removeEventListener("focusout", handleFocusOut);
       window.removeEventListener("scroll", handleViewportChange, true);
       window.removeEventListener("resize", handleViewportChange);
     };
-  }, []);
+  }, [tooltipId]);
 
   if (!tooltip) return null;
 
   return (
     <div
       ref={tooltipRef}
+      id={tooltipId}
       className="neubiki-tooltip pointer-events-none fixed z-[9999] max-w-[260px] px-2.5 py-1.5 text-center text-[11px] font-medium leading-tight"
       style={{
+        ...tooltip.colors,
         left: layout?.left ?? 0,
         top: layout?.top ?? 0,
         visibility: layout ? "visible" : "hidden",

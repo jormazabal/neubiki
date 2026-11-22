@@ -25,12 +25,15 @@ public static partial class Bridge
     }
 
     static async Task<Node> Within(
-        ProtonDriveClient drive, NodeUid nodeUid, NodeUid rootUid, CancellationToken ct)
+        ProtonDriveClient drive, NodeUid nodeUid, NodeUid rootUid, CancellationToken ct, NodeUid? excluded = null,
+        List<NodeUid>? traceAncestors = null)
     {
         var node = await GetVisibleNode(drive, nodeUid, ct);
         var ancestor = node;
         for (var depth = 0; depth < 128; depth++)
         {
+            if (ancestor.Uid == excluded)
+                throw new Failure("invalid-move-target");
             if (ancestor.Uid == rootUid)
             {
                 if (ancestor is not FolderNode)
@@ -43,6 +46,7 @@ public static partial class Bridge
             ancestor = await GetVisibleNode(drive, parentUid, ct);
             if (ancestor is not FolderNode)
                 break;
+            traceAncestors?.Add(ancestor.Uid);
         }
 
         throw new Failure("outside-workspace");
@@ -52,8 +56,10 @@ public static partial class Bridge
         ProtonDriveClient drive, NodeUid uid, NodeUid? rootUid, CancellationToken ct)
     {
         var scope = rootUid ?? (await drive.GetMyFilesFolderAsync(ct)).Uid;
-        return await Within(drive, uid, scope, ct) as FolderNode
-            ?? throw new Failure("not-folder");
+        var node = await Within(drive, uid, scope, ct);
+        if (node is not FolderNode folder || ReservedWorkspaceMetadataName(VerifiedName(folder)))
+            throw new Failure("not-folder");
+        return folder;
     }
 
     static async Task<JsonObject> WorkspaceList(
@@ -64,12 +70,13 @@ public static partial class Bridge
         var folder = await WorkspaceFolder(
             drive, parentUid, scope == null ? null : NodeUid.Parse(scope), ct);
         var items = new JsonArray();
+        var inspected = 0;
         await foreach (var uid in drive.EnumerateFolderChildrenNodeUidsAsync(folder.Uid, ct))
         {
-            if (items.Count >= 10000)
+            if (++inspected > 10000)
                 throw new Failure("inventory-limit");
             var node = await drive.GetNodeAsync(uid, ct) ?? throw new Failure("incomplete-inventory");
-            if (node.TrashTime == null && node.ParentUid == folder.Uid)
+            if (node.TrashTime == null && node.ParentUid == folder.Uid && !ReservedWorkspaceMetadataName(VerifiedName(node)))
                 items.Add((JsonNode)NodeDto(node));
         }
 
@@ -77,11 +84,14 @@ public static partial class Bridge
     }
 
     static async Task<FileNode> WorkspaceFile(
-        ProtonDriveClient drive, JsonObject payload, CancellationToken ct)
+        ProtonDriveClient drive, JsonObject payload, CancellationToken ct, List<NodeUid>? traceAncestors = null)
     {
         var node = await Within(
-            drive, NodeUid.Parse(Text(payload, "nodeId")), NodeUid.Parse(Text(payload, "rootId")), ct);
-        return node as FileNode ?? throw new Failure("not-file");
+            drive, NodeUid.Parse(Text(payload, "nodeId")), NodeUid.Parse(Text(payload, "rootId")), ct,
+            traceAncestors: traceAncestors);
+        if (node is not FileNode file || ReservedWorkspaceMetadataName(VerifiedName(file)))
+            throw new Failure("not-file");
+        return file;
     }
 
     static async Task<JsonObject> WorkspaceAsset(
@@ -94,7 +104,8 @@ public static partial class Bridge
         var folder = await WorkspaceFolder(drive, parentUid, rootUid, ct);
         var parts = Text(payload, "relativePath").Split('/');
         if (parts.Length > 128 || parts.Any(part =>
-            part.Length is 0 or > 255 || part.Contains('\\') || part.Contains(':') || part.Any(char.IsControl)))
+            part.Length is 0 or > 255 || part.Contains('\\') || part.Contains(':') || part.Any(char.IsControl)
+            || ReservedWorkspaceMetadataName(part)))
             throw new Failure("invalid-asset-path");
 
         for (var i = 0; i < parts.Length - 1; i++)
@@ -139,9 +150,7 @@ public static partial class Bridge
     {
         var file = await WorkspaceFile(drive, payload, ct);
         var name = (string?)NodeDto(file)["name"] ?? throw new Failure("unverified-node-name");
-        var extension = Path.GetExtension(name);
-        if (!extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".markdown", StringComparison.OrdinalIgnoreCase))
+        if (!IsMarkdownName(name))
             throw new Failure("not-markdown");
         return file;
     }
@@ -213,7 +222,9 @@ public static partial class Bridge
     static async Task<JsonObject> WriteWorkspaceRevision(
         ProtonDriveClient drive, JsonObject payload, CancellationToken ct)
     {
-        var file = await WorkspaceMarkdown(drive, payload, ct);
+        var note = payload["contentKind"]?.GetValue<string>() == "handwritten";
+        var file = note ? await WorkspaceFile(drive, payload, ct) : await WorkspaceMarkdown(drive, payload, ct);
+        if (note && !IsHandwrittenName(VerifiedName(file))) throw new Failure("not-handwritten");
         var baseRevision = file.ActiveRevision.Uid;
         if (baseRevision.ToString() != Text(payload, "baseRevisionId"))
             throw new Failure("revision-conflict");
@@ -222,7 +233,7 @@ public static partial class Bridge
         if (encoded.Length > MaxContent * 4L / 3 + 4)
             throw new Failure("file-too-large");
         var content = Convert.FromBase64String(encoded);
-        if (content.Length > MaxContent)
+        if (content.Length > (note ? 8 * 1024 * 1024 : MaxContent))
             throw new Failure("file-too-large");
 
         using var input = new MemoryStream(content, writable: false);

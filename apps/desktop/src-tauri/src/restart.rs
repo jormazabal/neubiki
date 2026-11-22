@@ -1,11 +1,21 @@
 //! A restart reservation is shared by all windows; it does not stop active work.
-use crate::{runtime_dispatch::LocalApiState, PROJECT_LOCATION_GATE};
+use crate::{runtime_dispatch::LocalApiState, runtime_errors::RuntimeFailure, PROJECT_LOCATION_GATE};
 use neubiki_core::operations::{Operations, Phase};
 use std::sync::{Mutex, MutexGuard};
 use tauri::Manager;
 
 #[derive(Default)]
 pub(crate) struct RestartFence(Mutex<Option<String>>);
+
+#[tauri::command]
+pub(crate) fn desktop_update_channel_enabled(window: tauri::WebviewWindow) -> Result<bool, RuntimeFailure> {
+    crate::require_workspace_window(&window).map_err(|_| RuntimeFailure::window_denied())?;
+    Ok(cfg!(target_os = "windows")
+        && window.config().plugins.0.get("updater")
+            .and_then(|config| config.get("endpoints"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|endpoints| !endpoints.is_empty()))
+}
 pub(crate) fn admission(app: &tauri::AppHandle) -> Result<MutexGuard<'_, Option<String>>, String> {
     let guard = app
         .state::<RestartFence>()
@@ -22,45 +32,55 @@ pub(crate) fn admission(app: &tauri::AppHandle) -> Result<MutexGuard<'_, Option<
 pub(crate) async fn prepare_runtime_restart(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
-) -> Result<String, String> {
-    crate::require_workspace_window(&window)?;
-    tauri::async_runtime::spawn_blocking(move||{
-        let _location=PROJECT_LOCATION_GATE.lock().map_err(|_|"No se puede revisar la actividad de audio")?;
-        let mut fence=app.state::<RestartFence>().inner().0.lock().map_err(|_|"No se puede preparar la actualización")?;
-        if fence.is_some(){return Err("Ya hay una actualización preparada".into());}
-        let snapshots=app.state::<Operations>().snapshots().map_err(str::to_string)?;
-        if snapshots.iter().any(|entry|matches!(entry.phase,Phase::Queued|Phase::Running))||app.state::<LocalApiState>().1.has_background_work(){return Err("Hay trabajos en curso. Espera a que terminen antes de instalar; no se han cancelado ni repetido".into());}
-        app.state::<neubiki_recording::RecordingService>().request("restart-hold",serde_json::json!({}))?;
-        let token=neubiki_core::compact_id("restart");*fence=Some(token.clone());Ok(token)
-    }).await.map_err(|_|"No se pudo comprobar la preparación de la actualización")?
+) -> Result<String, RuntimeFailure> {
+    crate::require_workspace_window(&window).map_err(|_| RuntimeFailure::window_denied())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let unavailable = || RuntimeFailure::rejected(503, "runtime-update-failed");
+        let _location = PROJECT_LOCATION_GATE.lock().map_err(|_| unavailable())?;
+        let mut fence = app.state::<RestartFence>().inner().0.lock().map_err(|_| unavailable())?;
+        if fence.is_some() {
+            return Err(RuntimeFailure::rejected(409, "runtime-restart-reserved"));
+        }
+        let snapshots = app.state::<Operations>().snapshots().map_err(|_| unavailable())?;
+        if snapshots.iter().any(|entry| matches!(entry.phase, Phase::Queued | Phase::Running))
+            || app.state::<LocalApiState>().1.has_background_work() {
+            return Err(RuntimeFailure::rejected(409, "runtime-update-work-active"));
+        }
+        app.state::<neubiki_recording::RecordingService>()
+            .request("restart-hold", serde_json::json!({}))
+            .map_err(|_| RuntimeFailure::unconfirmed("runtime-update-failed"))?;
+        let token = neubiki_core::compact_id("restart");
+        *fence = Some(token.clone());
+        Ok(token)
+    }).await.map_err(|_| RuntimeFailure::unconfirmed("runtime-update-failed"))?
 }
 #[tauri::command]
 pub(crate) async fn release_runtime_restart(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     token: String,
-) -> Result<(), String> {
-    crate::require_workspace_window(&window)?;
+) -> Result<(), RuntimeFailure> {
+    crate::require_workspace_window(&window).map_err(|_| RuntimeFailure::window_denied())?;
     tauri::async_runtime::spawn_blocking(move || {
+        let unavailable = || RuntimeFailure::rejected(503, "runtime-update-failed");
         let _location = PROJECT_LOCATION_GATE
             .lock()
-            .map_err(|_| "No se puede revisar la actividad de audio")?;
+            .map_err(|_| unavailable())?;
         let mut fence = app
             .state::<RestartFence>()
             .inner()
             .0
             .lock()
-            .map_err(|_| "No se puede devolver el espacio de trabajo")?;
+            .map_err(|_| unavailable())?;
         if fence.as_deref() != Some(token.as_str()) {
-            return Err(
-                "La preparación de la actualización ya cambió; vuelve a comprobar su estado".into(),
-            );
+            return Err(RuntimeFailure::rejected(409, "runtime-update-reservation-changed"));
         }
         app.state::<neubiki_recording::RecordingService>()
-            .request("restart-release", serde_json::json!({}))?;
+            .request("restart-release", serde_json::json!({}))
+            .map_err(|_| RuntimeFailure::unconfirmed("runtime-update-failed"))?;
         *fence = None;
         Ok(())
     })
     .await
-    .map_err(|_| "No se pudo devolver el espacio de trabajo")?
+    .map_err(|_| RuntimeFailure::unconfirmed("runtime-update-failed"))?
 }

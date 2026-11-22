@@ -90,7 +90,9 @@ impl RecordingService {
             if metadata::directory(&entry.path()).is_err(){unavailable_sessions+=1;continue;}
             let (mut session,raw)=match metadata::session(&root,&id){Ok(Some(value))=>value,Ok(None)=>{unavailable_sessions+=1;continue;},Err(_)=>{unavailable_sessions+=1;continue;}};
             session_revisions.insert(id.clone(),Some(metadata::hash(&raw)));
-            let interrupted=matches!(session.status,Status::Recording|Status::Paused|Status::Transcribing)||session.chunks.iter().any(|chunk|chunk.status=="sending");
+            let interrupted=matches!(session.status,Status::Recording|Status::Paused|Status::Transcribing)
+                || (cfg!(windows) && session.meeting && session.status == Status::Queued)
+                ||session.chunks.iter().any(|chunk|chunk.status=="sending");
             if interrupted {
                 if matches!(session.status,Status::Recording|Status::Paused){let mut recovered=0;for name in ["microphone.pcm","system.pcm"]{if let Ok(meta)=fs::symlink_metadata(entry.path().join(name)){if meta.is_file()&&!metadata::linked(&meta){recovered=recovered.max(meta.len()/2);}}}session.samples=recovered;session.recovered=true;}
                 for chunk in &mut session.chunks{if chunk.status=="sending"{chunk.status="unknown".into();}}
@@ -419,9 +421,17 @@ impl Engine {
                 };
                 validate_settings(&settings)?;
                 native::resolve(&mut settings)?;
-                let destination =
-                    serde_json::from_value(p["destination"].clone()).map_err(|e| e.to_string())?;
-                let s = Session::new(settings, destination);
+                let meeting = p.get("meetingTitle").is_some();
+                let destination = if meeting {
+                    let title = p["meetingTitle"].as_str().map(str::trim)
+                        .filter(|title| !title.is_empty() && title.chars().count() <= 150 && !title.chars().any(char::is_control))
+                        .ok_or("Indica un título de reunión válido de hasta 150 caracteres.")?;
+                    Some(Destination { project_id: model::MEETING_USAGE_SCOPE.into(), folder_id: None, name: title.into() })
+                } else {
+                    serde_json::from_value(p["destination"].clone()).map_err(|e| e.to_string())?
+                };
+                let mut s = Session::new(settings, destination);
+                s.meeting = meeting;
                 let id = s.id.clone();
                 fs::create_dir_all(self.root.join(&id)).map_err(|e| e.to_string())?;
                 self.sessions.insert(0, s);
@@ -505,7 +515,7 @@ impl Engine {
                     return Err("Finaliza la grabación antes de elegir destino".into());
                 }
                 let s = self.session_mut(&id)?;
-                if s.status == Status::Transcribing || s.document_id.is_some() {
+                if s.meeting || s.status == Status::Transcribing || s.document_id.is_some() {
                     return Err("El destino ya está en uso".into());
                 }
                 s.destination = Some(
@@ -547,12 +557,19 @@ impl Engine {
                     return Err("Finaliza la grabación primero".into());
                 }
                 let s = self.session_mut(&id)?;
+                if s.meeting && p["confirmed"] != true {
+                    return Err("Confirma el envío de audio a OpenAI antes de transcribir.".into());
+                }
+                if s.meeting && s.status == Status::Completed {
+                    return Ok(self.snapshot());
+                }
                 if s.audio_deleted
                     || s.samples == 0
                     || s.destination.is_none()
                     || s.document_id.is_some()
                 {
-                    return Err("Se requiere audio y una carpeta de destino".into());
+                    return Err(if s.meeting { "Esta reunión no tiene audio disponible para transcribir." }
+                        else { "Se requiere audio y una carpeta de destino" }.into());
                 }
                 if s.chunks.iter().any(|c| c.status == "unknown")
                     && !p["confirmUnknown"].as_bool().unwrap_or(false)
@@ -620,6 +637,11 @@ impl Engine {
                 }
                 if let Some(document_id) = p["documentId"].as_str() {
                     s.document_id = Some(document_id.into());
+                    s.completed_at = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+                    s.status = Status::Completed;
+                    s.error = None;
+                }
+                if p["meetingTranscribed"] == true && s.meeting && s.status == Status::Transcribing {
                     s.completed_at = Some(time::OffsetDateTime::now_utc().unix_timestamp());
                     s.status = Status::Completed;
                     s.error = None;
@@ -839,6 +861,39 @@ mod tests {
         e.command("restart-release",json!({})).unwrap();assert!(e.command("portable-ready",json!({})).is_ok());
         e.command("exit-hold",json!({})).unwrap();assert!(e.command("start",json!({})).is_err());assert!(e.command("snapshot",json!({})).is_ok());
     }
+    #[test]
+    fn meeting_stop_keeps_audio_private_until_consent_and_completion_has_no_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = engine(dir.path());
+        let id = engine.active.clone().unwrap();
+        let session = engine.session_mut(&id).unwrap();
+        session.meeting = true;
+        session.destination = Some(Destination {
+            project_id: MEETING_USAGE_SCOPE.into(),
+            folder_id: None,
+            name: "Reunión de prueba".into(),
+        });
+        engine.command("external-pcm", json!({"id":id,"bytes":[1,0,2,0]})).unwrap();
+        engine.command("stop", json!({"id":id})).unwrap();
+        assert_eq!(engine.session_mut(&id).unwrap().status, Status::Ready);
+        assert!(engine.command("queue", json!({"id":id})).is_err());
+        assert!(engine.command("destination", json!({"id":id,"destination":{"projectId":"project","name":"Reunión.md"}})).is_err());
+        assert!(engine.command("claim", json!({})).unwrap().is_null());
+        engine.command("queue", json!({"id":id,"confirmed":true})).unwrap();
+        let claimed = engine.command("claim", json!({})).unwrap();
+        assert_eq!(claimed["id"], id);
+        engine.command("job-update", json!({"id":id,"meetingTranscribed":true,"chunks":[{
+            "start":0,"samples":2,"status":"completed","text":"Se aprobó el plan.","languages":["es"]
+        }]})).unwrap();
+        engine.command("job-release", json!({"id":id})).unwrap();
+        let source = transcript_source(dir.path(), &id).unwrap();
+        assert_eq!(source["segments"][0]["text"], "Se aprobó el plan.");
+        assert!(engine.session_mut(&id).unwrap().document_id.is_none());
+        assert_eq!(engine.session_mut(&id).unwrap().status, Status::Completed);
+        engine.command("queue", json!({"id":id,"confirmed":true})).unwrap();
+        assert!(engine.command("claim", json!({})).unwrap().is_null());
+    }
+
     #[test]
     fn last_input_off_pauses_and_does_not_discard() {
         let dir = tempfile::tempdir().unwrap();

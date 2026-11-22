@@ -708,7 +708,7 @@ export type HandwrittenPencilType = Exclude<HandwrittenToolId, "eraser" | "lasso
 export type HandwrittenPageBackground = "blank" | "ruled" | "grid" | "dots" | "cornell";
 export type HandwrittenPageSizePreset = "A4" | "4:3" | "16:9" | "1:1" | "Letter" | "free";
 export type HandwrittenPageOrientation = "portrait" | "landscape";
-export type HandwrittenExportFormat = "knote" | "png" | "svg" | "pdf";
+export type HandwrittenExportFormat = "nbnote" | "png" | "svg" | "pdf";
 
 export type HandwrittenPoint = [number, number, number, number, number?, number?];
 export type HandwrittenEraserMode = "stroke" | "partial";
@@ -859,7 +859,7 @@ export type ReferenceDocumentWorkspaceTab = {
   id: string;
   name: string;
   path: string;
-  format: "pdf" | "docx" | "xlsx";
+  format: "pdf" | "docx" | "xlsx" | "text" | "audio" | "video";
   readonly: true;
   pageFocus?:{pageNumber:number;requestId:number};
 };

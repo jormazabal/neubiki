@@ -624,49 +624,49 @@ input[type="range"]::-moz-range-thumb {
   overflow: visible;
 }
 
-[data-theme="dark"] .neubiki-editor-toolbar {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar {
   background-color: rgb(20 21 24 / 0.96) !important;
 }
 
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-button,
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-select {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-button,
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-select {
   border-color: transparent;
   background-color: transparent !important;
   color: rgb(var(--app-muted)) !important;
 }
 
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-button:hover,
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-select:hover,
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-button[aria-expanded="true"],
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-select[aria-expanded="true"] {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-button:hover,
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-select:hover,
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-button[aria-expanded="true"],
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-select[aria-expanded="true"] {
   border-color: rgb(var(--app-border) / 0.86) !important;
   background-color: rgb(var(--app-panel-strong) / 0.86) !important;
   color: rgb(var(--app-text)) !important;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.035);
 }
 
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-button-active,
-[data-theme="dark"] .neubiki-editor-toolbar .toolbar-button-active:hover {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-button-active,
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar .toolbar-button-active:hover {
   border-color: rgb(var(--accent) / 0.62) !important;
   background-color: rgb(var(--accent-soft) / 0.58) !important;
   color: rgb(var(--accent)) !important;
   box-shadow: inset 0 0 0 1px rgb(var(--accent) / 0.12);
 }
 
-[data-theme="dark"] .neubiki-editor-toolbar [role="menu"] {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar [role="menu"] {
   background-color: rgb(var(--app-panel-strong)) !important;
   border-color: rgb(var(--app-border) / 0.9) !important;
 }
 
-[data-theme="dark"] .neubiki-editor-toolbar [role="menuitem"]:hover {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-editor-toolbar [role="menuitem"]:hover {
   background-color: rgb(var(--app-surface)) !important;
 }
 
-[data-theme="dark"] .neubiki-document-tabs {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-document-tabs {
   background-color: rgb(19 20 23 / 0.98) !important;
 }
 
-[data-theme="dark"] .neubiki-document-tab {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-document-tab {
   border-color: rgb(var(--app-border) / 0.72) !important;
   background-color: transparent !important;
   color: rgb(var(--app-muted)) !important;
@@ -677,15 +677,15 @@ input[type="range"]::-moz-range-thumb {
     box-shadow 140ms ease;
 }
 
-[data-theme="dark"] .neubiki-document-tab:hover {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-document-tab:hover {
   border-color: rgb(70 72 79 / 0.92) !important;
   background-color: rgb(35 36 41 / 0.78) !important;
   color: rgb(var(--app-text)) !important;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.035);
 }
 
-[data-theme="dark"] .neubiki-document-tab-active,
-[data-theme="dark"] .neubiki-document-tab-active:hover {
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-document-tab-active,
+[data-theme="dark"]:not([data-workspace-profile]) .neubiki-document-tab-active:hover {
   border-color: rgb(var(--app-border) / 0.86) !important;
   background:
     linear-gradient(180deg, rgb(29 30 34 / 0.98), rgb(23 24 27 / 0.98)) !important;
@@ -846,7 +846,7 @@ input[type="range"]::-moz-range-thumb {
 
 .neubiki-tooltip {
   border: 1px solid rgb(var(--tooltip-border));
-  border-radius: 6px;
+  border-radius: 9px;
   background: rgb(var(--tooltip-bg));
   color: rgb(var(--tooltip-text));
   box-shadow: var(--tooltip-shadow);

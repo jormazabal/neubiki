@@ -1,9 +1,15 @@
+import { needsOperationCheck, useRuntimeErrorMessage } from "../../lib/i18n/protonErrors";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { getApiErrorMessage } from "../../lib/api/client";
+import { Button } from "../../components/ui/Button";
+import { ProgressBar } from "../../components/ui/ProgressBar";
+import { StatusTag } from "../../components/ui/StatusTag";
+import { InlineNotice } from "../../components/patterns/InlineNotice";
 import { getAiConfig } from "../../lib/api/config";
 import { requestProtonText } from "../../lib/api/protonText";
 import type { ProtonTextRequest } from "../../types/protonText";
-import { ReadonlyMarkdownViewer } from "../editor/ReadonlyMarkdownViewer";
+import { ProtonProposalReview } from "./ProtonProposalReview";
+import { AiHistoryRetentionOption } from "./AiHistoryRetentionOption";
+import { translationLanguages, useProtonDocumentAiCopy, type TranslationLanguage } from "./protonDocumentAiCopy";
 import type {
   ProtonDocumentToolProps,
   ProtonToolEdit,
@@ -15,19 +21,18 @@ type Proposal = { target: ProtonToolTarget; edit: ProtonToolEdit };
 type State =
   | { phase: "idle" | "loading" }
   | { phase: "review" | "stale" | "checking"; proposal: Proposal; message?: string }
+  | { phase: "request-error"; cause: unknown }
   | { phase: "error" | "status"; message: string };
 
-const languages = [
-  "Alemán", "Catalán", "Español", "Euskera", "Francés", "Gallego", "Inglés", "Italiano", "Portugués",
-];
-const fieldClass = "min-h-11 w-full rounded-md border border-line bg-white px-2 text-sm";
-const buttonClass = "min-h-11 rounded-md px-3 text-sm font-medium disabled:opacity-50";
-const primaryClass = buttonClass + " bg-brand-orange text-white hover:bg-brand-dark";
 
-export function ProtonTranslation({ available, capture, apply }: ProtonDocumentToolProps) {
+export function ProtonTranslation({ available, capture, apply, onCheckAiUsage }: ProtonDocumentToolProps) {
+  const runtimeErrorMessage = useRuntimeErrorMessage();
+  const { translation: c, historyWarning: historyWarningCopy } = useProtonDocumentAiCopy();
   const [scope, setScope] = useState<Scope | "">("");
-  const [language, setLanguage] = useState("");
+  const [language, setLanguage] = useState<TranslationLanguage | "">("");
   const [state, setState] = useState<State>({ phase: "idle" });
+  const [retainHistory, setRetainHistory] = useState(false);
+  const [historyWarning, setHistoryWarning] = useState(false);
   const inFlight = useRef<AbortController | null>(null);
   const currentEditor = useRef({ available, apply });
   currentEditor.current = { available, apply };
@@ -39,7 +44,7 @@ export function ProtonTranslation({ available, capture, apply }: ProtonDocumentT
 
     const target = capture();
     if (!target) {
-      setState({ phase: "error", message: "Abre un documento Markdown para traducir." });
+      setState({ phase: "error", message: c.open });
       return;
     }
 
@@ -51,8 +56,8 @@ export function ProtonTranslation({ available, capture, apply }: ProtonDocumentT
       setState({
         phase: "error",
         message: scope === "selection"
-          ? "Selecciona texto en el editor y vuelve a pulsar Traducir."
-          : "El documento está vacío.",
+          ? c.select
+          : c.empty,
       });
       return;
     }
@@ -60,6 +65,8 @@ export function ProtonTranslation({ available, capture, apply }: ProtonDocumentT
     const controller = new AbortController();
     inFlight.current = controller;
     setState({ phase: "loading" });
+    setHistoryWarning(false);
+    setRetainHistory(false);
     try {
       const result = await requestProtonText({
         ...target.address,
@@ -68,20 +75,23 @@ export function ProtonTranslation({ available, capture, apply }: ProtonDocumentT
         language,
         scope,
         markdown,
+        ...(retainHistory ? { retainHistory: true as const } : {}),
       }, controller.signal);
       if (controller.signal.aborted) return;
 
       const kind = scope === "selection" ? "replace_range" : "replace_document";
       if (result?.kind !== kind || typeof result.text !== "string" || !result.text.trim()) {
-        setState({ phase: "error", message: "El runtime no devolvió una traducción válida para el alcance elegido." });
+        setState({ phase: "error", message: c.invalid });
       } else if (result.text === markdown) {
-        setState({ phase: "status", message: "La traducción coincide con el original." });
+        setHistoryWarning(retainHistory && result.historySaved !== true);
+        setState({ phase: "status", message: c.same });
       } else {
+        setHistoryWarning(retainHistory && result.historySaved !== true);
         setState({ phase: "review", proposal: { target, edit: { kind, markdown: result.text } } });
       }
-    } catch (error) {
+    } catch (cause) {
       if (!controller.signal.aborted) {
-        setState({ phase: "error", message: getApiErrorMessage(error, "No se pudo generar la traducción.") });
+        setState({ phase: "request-error", cause });
       }
     } finally {
       inFlight.current = null;
@@ -98,16 +108,16 @@ export function ProtonTranslation({ available, capture, apply }: ProtonDocumentT
       const { permissions } = await getAiConfig();
       if (controller.signal.aborted) return;
       if (!permissions.editDocuments) {
-        setState({ phase: "review", proposal, message: "Activa el permiso de edición de documentos en Ajustes de IA." });
+        setState({ phase: "review", proposal, message: c.permission });
         return;
       }
       const editor = currentEditor.current;
       setState(editor.available && editor.apply(proposal.target, proposal.edit)
-        ? { phase: "status", message: "Traducción aplicada al editor." }
-        : { phase: "stale", proposal, message: "La propuesta ya no se puede aplicar a su documento o selección. Vuelve a pulsar Traducir." });
+        ? { phase: "status", message: c.applied }
+        : { phase: "stale", proposal, message: c.stale });
     } catch {
       if (!controller.signal.aborted) {
-        setState({ phase: "review", proposal, message: "No se pudo comprobar el permiso de edición. Vuelve a intentarlo." });
+        setState({ phase: "review", proposal, message: c.permissionFailed });
       }
     } finally {
       inFlight.current = null;
@@ -118,47 +128,59 @@ export function ProtonTranslation({ available, capture, apply }: ProtonDocumentT
   const reviewing = "proposal" in state ? state : null;
 
   return <div className="space-y-3 text-sm text-ink-primary">
-    {!available && <p className="text-ink-secondary">La traducción requiere un documento Markdown disponible.</p>}
+    {!available && <p className="text-ink-secondary">{c.unavailable}</p>}
     <form onSubmit={translate}>
       <fieldset className="flex flex-wrap items-end gap-2" disabled={!available || loading || state.phase === "checking"}>
         <label className="grid min-w-32 flex-1 gap-1 text-xs font-medium">
-          Alcance
-          <select className={fieldClass} value={scope} onChange={event => {
+          {c.scope}
+          <select className="ui-field" value={scope} onChange={event => {
             setScope(event.target.value as Scope);
             setState({ phase: "idle" });
           }}>
-            <option value="" disabled>Elige el alcance</option>
-            <option value="selection">Selección</option>
-            <option value="document">Documento</option>
+            <option value="" disabled>{c.chooseScope}</option>
+            <option value="selection">{c.selection}</option>
+            <option value="document">{c.document}</option>
           </select>
         </label>
         <label className="grid min-w-32 flex-1 gap-1 text-xs font-medium">
-          Idioma de destino
-          <select className={fieldClass} value={language} onChange={event => {
-            setLanguage(event.target.value);
+          {c.language}
+          <select className="ui-field" value={language} onChange={event => {
+            setLanguage(event.target.value as TranslationLanguage);
             setState({ phase: "idle" });
           }}>
-            <option value="" disabled>Elige un idioma</option>
-            {languages.map(item => <option key={item}>{item}</option>)}
+            <option value="" disabled>{c.chooseLanguage}</option>
+            {translationLanguages.map(item => <option key={item} value={item}>{c.labelLanguage(item)}</option>)}
           </select>
         </label>
-        <button type="submit" className={reviewing ? buttonClass + " border border-line" : primaryClass} disabled={!scope || !language}>
-          Traducir
-        </button>
+        <Button type="submit" variant={reviewing ? "secondary" : "primary"} disabled={!scope || !language}>
+          {c.translate}
+        </Button>
       </fieldset>
+      <AiHistoryRetentionOption checked={retainHistory} onChange={setRetainHistory}
+        disabled={!available || loading || state.phase === "checking"} />
     </form>
-    {loading && <p role="status">Traduciendo…</p>}
-    {state.phase === "status" && <p role="status">{state.message}</p>}
-    {state.phase === "error" && <p role="alert" className="text-red-800">{state.message}</p>}
-    {reviewing && <section className="space-y-2 rounded-md border border-line bg-panel p-2.5">
-      <h3 className="font-medium">Vista previa</h3>
-      <div className="max-h-[35dvh] overflow-auto overscroll-contain">
-        <ReadonlyMarkdownViewer markdown={reviewing.proposal.edit.markdown} ariaLabel="Traducción propuesta" emptyMessage="Traducción vacía" />
-      </div>
-      {reviewing.message && <p role="alert" className="text-red-800">{reviewing.message}</p>}
-      <button type="button" className={primaryClass} onClick={applyProposal} disabled={!available || reviewing.phase !== "review"}>
-        {reviewing.phase === "checking" ? "Comprobando permiso…" : reviewing.proposal.edit.kind === "replace_range" ? "Aplicar a la selección" : "Aplicar al documento"}
-      </button>
-    </section>}
+    {historyWarning && <InlineNotice tone="warning" announce="status">{historyWarningCopy}</InlineNotice>}
+    {loading && <div className="space-y-2">
+      <StatusTag role="status" activity="working">{c.translating}</StatusTag>
+      <ProgressBar label={c.progress} />
+    </div>}
+    {state.phase === "status" && <StatusTag tone="success" role="status">{state.message}</StatusTag>}
+    {state.phase === "error" && <InlineNotice tone="error" announce="alert">{state.message}</InlineNotice>}
+    {state.phase === "request-error" && <InlineNotice tone="error" announce="alert"
+      action={needsOperationCheck(state.cause) && onCheckAiUsage
+        ? <Button size="compact" onClick={onCheckAiUsage}>{c.checkUsage}</Button> : undefined}>
+      {runtimeErrorMessage(state.cause, c.failed)}
+    </InlineNotice>}
+    {reviewing && <>
+      {reviewing.message && <InlineNotice tone="warning" announce="alert">{reviewing.message}</InlineNotice>}
+      <ProtonProposalReview title={c.review} target={reviewing.proposal.target} kind={reviewing.proposal.edit.kind}
+        markdown={reviewing.proposal.edit.markdown} proposalLabel={c.proposal}
+        actions={<>
+          <Button disabled={reviewing.phase === "checking"} onClick={() => setState({ phase: "idle" })}>{c.discard}</Button>
+          <Button variant="primary" onClick={applyProposal} disabled={!available || reviewing.phase !== "review"}>
+            {reviewing.phase === "checking" ? c.checking : reviewing.proposal.edit.kind === "replace_range" ? c.applySelection : c.applyDocument}
+          </Button>
+        </>} />
+    </>}
   </div>;
 }

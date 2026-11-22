@@ -8,9 +8,11 @@ import {
   FilePlus2,
   FileText,
   ScanText,
+  Sparkles,
   Grid3X3,
   Highlighter,
   Lasso,
+  Mic,
   Paintbrush,
   PanelLeft,
   PanelTop,
@@ -73,8 +75,9 @@ import {
 import {PageOcrDialog} from "./PageOcrDialog";
 import type {HandwrittenOcrApplyRequest,HandwrittenOcrApply,HandwrittenOcrResult} from "../../types/handwrittenOcr";
 import {PageTranscriptionDialog} from "./PageTranscriptionDialog";
-import {pageTranscription,updatePageTranscription} from "./pageTranscription";
+import {PageTranscriptionError,pageTranscription,updatePageTranscription} from "./pageTranscription";
 import type {HandwrittenPageFocus} from "../../types/localSearch";
+import {useHandwrittenCopy} from "../../lib/i18n/handwrittenCopy";
 import "./HandwrittenEditor.css";
 
 type HandwrittenEditorProps = {
@@ -93,6 +96,7 @@ type HandwrittenEditorProps = {
   onBeforeOcr?:()=>Promise<void>;
   onOcrObserved?:(receipt:HandwrittenOcrResult)=>Promise<void>;
   onApplyOcr?:(request:HandwrittenOcrApplyRequest)=>Promise<HandwrittenOcrApply>;
+  onPageAi?: (kind: "ocr" | "drawing" | "transcription", pageId: string, pageNumber: number) => void;
 };
 
 type PageViewport = {
@@ -159,15 +163,15 @@ const pencilTypeIcons: Record<HandwrittenPencilType, typeof PenLine> = {
 };
 
 const pencilColorSwatches = [
-  { label: "Negro", value: "#111827" },
-  { label: "Gris carbon", value: "#374151" },
-  { label: "Azul boligrafo", value: "#1D4ED8" },
-  { label: "Rojo boligrafo", value: "#DC2626" },
-  { label: "Verde boligrafo", value: "#15803D" },
-  { label: "Fosforito amarillo", value: "#FACC15" },
-  { label: "Fosforito lima", value: "#A3E635" },
-  { label: "Fosforito rosa", value: "#FB7185" },
-];
+  { id: "black", value: "#111827" },
+  { id: "charcoal", value: "#374151" },
+  { id: "blue", value: "#1D4ED8" },
+  { id: "red", value: "#DC2626" },
+  { id: "green", value: "#15803D" },
+  { id: "yellow", value: "#FACC15" },
+  { id: "lime", value: "#A3E635" },
+  { id: "pink", value: "#FB7185" },
+] as const;
 
 const PAGE_LAYER_THUMBNAIL_MAX_WIDTH = 86;
 const PAGE_LAYER_THUMBNAIL_MAX_HEIGHT = 108;
@@ -195,7 +199,9 @@ export function HandwrittenEditor({
   onBeforeOcr,
   onOcrObserved,
   onApplyOcr,
+  onPageAi,
 }: HandwrittenEditorProps) {
+  const {editor:copy,preview,ai,pageText}=useHandwrittenCopy();
   const [activePencilId, setActivePencilId] = useState("pencil-1");
   const [activeUtilityTool, setActiveUtilityTool] = useState<UtilityTool>("draw");
   const [configuringPencilId, setConfiguringPencilId] = useState<string | null>(null);
@@ -208,7 +214,7 @@ export function HandwrittenEditor({
   const [activePageId, setActivePageId] = useState("");
   const [pageOcr,setPageOcr]=useState<{noteId:string;pageId:string;pageNumber:number}|null>(null);
   const [pageTextReview,setPageTextReview]=useState<{noteId:string;pageId:string;pageNumber:number;baseText:string}|null>(null);
-  const [navigationNotice,setNavigationNotice]=useState("");
+  const [pageUnavailable,setPageUnavailable]=useState(false);
   const appliedPageFocus=useRef<number|null>(null);
   const [zoomPercent, setZoomPercent] = useState(72);
   const [selectedStrokeIds, setSelectedStrokeIds] = useState<Set<string>>(() => new Set());
@@ -240,7 +246,7 @@ export function HandwrittenEditor({
   useEffect(() => {
     if (noteIdRef.current !== noteId) {
       noteIdRef.current = noteId;
-      setNavigationNotice("");
+      setPageUnavailable(false);
       undoStackRef.current = [];
       redoStackRef.current = [];
       contentRef.current = content;
@@ -313,9 +319,9 @@ export function HandwrittenEditor({
     if(!pageFocus||pageFocus.noteId!==noteId||!content||appliedPageFocus.current===pageFocus.requestId)return;
     appliedPageFocus.current=pageFocus.requestId;
     if(content.pages.some(page=>page.id===pageFocus.pageId)){
-      setActivePageId(pageFocus.pageId);setNavigationNotice("");
+      setActivePageId(pageFocus.pageId);setPageUnavailable(false);
       pendingMiniMapNavigationRef.current={pageId:pageFocus.pageId,ratioX:0.5,ratioY:0};
-    }else setNavigationNotice("La página del resultado ya no está disponible. La nota y sus demás páginas se conservan.");
+    }else setPageUnavailable(true);
     onPageFocusHandled?.(pageFocus.requestId);
   },[pageFocus,noteId,content,onPageFocusHandled]);
   const pencilPresets = useMemo(() => normalizeToolPresets(toolPresets), [toolPresets]);
@@ -979,7 +985,9 @@ export function HandwrittenEditor({
   function handleAddPencil(anchorElement: HTMLElement | null) {
     const result = addPencilPresetToList(pencilPresets);
     pencilConfigAnchorRef.current = anchorElement;
-    onToolPresetsChange(result.toolPresets);
+    onToolPresetsChange(result.toolPresets.map((preset, index) =>
+      index === pencilPresets.length ? {...preset, label:`${copy.penTypes[preset.type ?? "pen"]} ${index+1}`} : preset
+    ));
     setActivePencilId(result.presetId);
     setActiveUtilityTool("draw");
     setConfiguringPencilId(result.presetId);
@@ -1015,8 +1023,8 @@ export function HandwrittenEditor({
         <div className={groupClass}>
           <button
             className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange"
-            aria-label={vertical ? "Mover barra arriba" : "Mover barra a la izquierda"}
-            data-tooltip={vertical ? "Barra arriba" : "Barra izquierda"}
+            aria-label={vertical ? copy.moveToolbarTop : copy.moveToolbarLeft}
+            data-tooltip={vertical ? copy.moveToolbarTop : copy.moveToolbarLeft}
             onClick={() => setToolbarPlacement(vertical ? "top" : "left")}
           >
             <ToggleIcon size={16} />
@@ -1030,7 +1038,8 @@ export function HandwrittenEditor({
                 key={pencil.id}
                 className={["relative grid h-8 w-8 place-items-center rounded-md transition", activeUtilityTool === "draw" && activePencilId === pencil.id ? "bg-brand-hover" : "hover:bg-brand-hover"].join(" ")}
                 aria-label={pencil.label}
-                data-tooltip={`${pencil.label} · doble click configura`}
+                aria-pressed={activeUtilityTool === "draw" && activePencilId === pencil.id}
+                data-tooltip={`${pencil.label} · ${copy.configureToolHint}`}
                 onClick={() => handleSelectPencil(pencil.id)}
                 onDoubleClick={(event) => {
                   pencilConfigAnchorRef.current = event.currentTarget;
@@ -1044,7 +1053,7 @@ export function HandwrittenEditor({
             );
           })}
           {pencilPresets.length < MAX_PENCIL_PRESETS ? (
-            <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label="Añadir pencil" data-tooltip="Añadir pencil" onClick={(event) => handleAddPencil(event.currentTarget)}>
+            <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label={copy.addPen} data-tooltip={copy.addPen} onClick={(event) => handleAddPencil(event.currentTarget)}>
               <Plus size={16} />
             </button>
           ) : null}
@@ -1052,8 +1061,9 @@ export function HandwrittenEditor({
         <div className={groupClass}>
           <button
             className={["grid h-8 w-8 place-items-center rounded-md transition", activeUtilityTool === "eraser" ? "bg-brand-hover text-brand-orange" : "text-ink-secondary hover:bg-brand-hover hover:text-brand-orange"].join(" ")}
-            aria-label="Borrador"
-            data-tooltip="Borrador · doble click configura"
+            aria-label={copy.eraser}
+            aria-pressed={activeUtilityTool === "eraser"}
+            data-tooltip={`${copy.eraser} · ${copy.configureToolHint}`}
             onClick={() => setActiveUtilityTool("eraser")}
             onDoubleClick={(event) => {
               eraserConfigAnchorRef.current = event.currentTarget;
@@ -1070,8 +1080,9 @@ export function HandwrittenEditor({
           </button>
           <button
             className={["grid h-8 w-8 place-items-center rounded-md transition", activeUtilityTool === "lasso" ? "bg-brand-hover text-brand-orange" : "text-ink-secondary hover:bg-brand-hover hover:text-brand-orange"].join(" ")}
-            aria-label="Lazo"
-            data-tooltip="Lazo"
+            aria-label={copy.lasso}
+            aria-pressed={activeUtilityTool === "lasso"}
+            data-tooltip={copy.lasso}
             onClick={() => {
               setActiveUtilityTool("lasso");
               setEraserSettingsOpen(false);
@@ -1079,15 +1090,16 @@ export function HandwrittenEditor({
           >
             <Lasso size={16} />
           </button>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange disabled:cursor-not-allowed disabled:opacity-40" aria-label="Eliminar selección" data-tooltip="Eliminar selección" disabled={selectedStrokeIds.size === 0} onClick={handleDeleteSelection}>
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange disabled:cursor-not-allowed disabled:opacity-40" aria-label={copy.deleteSelection} data-tooltip={copy.deleteSelection} disabled={selectedStrokeIds.size === 0} onClick={handleDeleteSelection}>
             <Trash2 size={16} />
           </button>
         </div>
         <div className={groupClass}>
           <button
             className={["grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange", pagesLayerOpen ? "bg-brand-hover text-brand-orange" : ""].join(" ")}
-            aria-label="Mostrar hojas"
-            data-tooltip={`Hojas · ${Math.max(1, activePageIndex + 1)}/${pageCount}`}
+            aria-label={copy.showPages}
+            aria-expanded={pagesLayerOpen}
+            data-tooltip={preview.position.replace("{current}",String(Math.max(1, activePageIndex + 1))).replace("{total}",String(pageCount))}
             onClick={(event) => {
               pagesLayerAnchorRef.current = event.currentTarget;
               setPagesLayerOpen((open) => !open);
@@ -1100,8 +1112,9 @@ export function HandwrittenEditor({
           </button>
           <button
             className={["grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange disabled:cursor-not-allowed disabled:opacity-40", pageSettingsOpen ? "bg-brand-hover text-brand-orange" : ""].join(" ")}
-            aria-label="Configurar hoja"
-            data-tooltip="Configurar hoja"
+            aria-label={copy.pageSettings}
+            aria-expanded={pageSettingsOpen}
+            data-tooltip={copy.pageSettings}
             disabled={!activePage}
             onClick={(event) => {
               pageSettingsAnchorRef.current = event.currentTarget;
@@ -1113,19 +1126,26 @@ export function HandwrittenEditor({
           >
             <Settings2 size={16} />
           </button>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange disabled:opacity-40" aria-label="Texto de la página" data-tooltip="Texto de la página" disabled={!activePage} onClick={()=>{
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange disabled:opacity-40" aria-label={preview.text} data-tooltip={preview.text} disabled={!activePage} onClick={()=>{
             const latest=contentRef.current;
             if(!activePage||!latest||activePointerRef.current)return;
             setPageTextReview({noteId,pageId:activePage.id,pageNumber:activePageIndex+1,baseText:pageTranscription(latest,activePage.id)});
             setPageSettingsOpen(false);setPagesLayerOpen(false);setZoomSettingsOpen(false);setEraserSettingsOpen(false);
           }}><FileText size={16}/></button>
-          <button className="grid min-h-11 min-w-11 place-items-center rounded text-ink-secondary hover:bg-brand-hover disabled:opacity-40" aria-label="Reconocer texto de la página con IA" data-tooltip="Reconocer texto con IA" disabled={!activePage||!onBeforeOcr||!onApplyOcr} onClick={()=>{if(activePage&&!activePointerRef.current){setPageOcr({noteId,pageId:activePage.id,pageNumber:activePageIndex+1});setPageTextReview(null);setPageSettingsOpen(false);setPagesLayerOpen(false);}}}><ScanText size={17}/></button>
+          <button className="grid min-h-11 min-w-11 place-items-center rounded text-ink-secondary hover:bg-brand-hover disabled:opacity-40" aria-label={copy.recognize} data-tooltip={copy.recognize} disabled={!activePage||(!onPageAi&&(!onBeforeOcr||!onApplyOcr))} onClick={()=>{if(activePage&&!activePointerRef.current){if(onPageAi)onPageAi("ocr",activePage.id,activePageIndex+1);else setPageOcr({noteId,pageId:activePage.id,pageNumber:activePageIndex+1});setPageTextReview(null);setPageSettingsOpen(false);setPagesLayerOpen(false);}}}><ScanText size={17}/></button>
+          {onPageAi && <button className="grid min-h-11 min-w-11 place-items-center rounded text-ink-secondary hover:bg-brand-hover disabled:opacity-40"
+            aria-label={copy.draw} data-tooltip={ai.drawingTitle} disabled={!activePage}
+            onClick={() => { if(activePage&&!activePointerRef.current) onPageAi("drawing",activePage.id,activePageIndex+1); }}><Sparkles size={17}/></button>}
+          {onPageAi && <button className="grid min-h-11 min-w-11 place-items-center rounded text-ink-secondary hover:bg-brand-hover disabled:opacity-40"
+            aria-label={ai.audioTitle} data-tooltip={ai.audioTitle} disabled={!activePage}
+            onClick={() => { if(activePage&&!activePointerRef.current) onPageAi("transcription",activePage.id,activePageIndex+1); }}><Mic size={17}/></button>}
         </div>
         <div className={groupClass}>
           <button
             className={["grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange", zoomSettingsOpen ? "bg-brand-hover text-brand-orange" : ""].join(" ")}
-            aria-label="Configurar zoom"
-            data-tooltip={`Zoom · ${zoomPercent}%`}
+            aria-label={copy.zoomSettings}
+            aria-expanded={zoomSettingsOpen}
+            data-tooltip={`${copy.zoom} · ${zoomPercent}%`}
             onClick={(event) => {
               zoomSettingsAnchorRef.current = event.currentTarget;
               setZoomSettingsOpen((open) => !open);
@@ -1138,10 +1158,10 @@ export function HandwrittenEditor({
           </button>
         </div>
         <div className={groupClass}>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label="Deshacer" data-tooltip="Deshacer" onClick={handleUndo}>
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label={copy.undo} data-tooltip={copy.undo} onClick={handleUndo}>
             <Undo2 size={16} />
           </button>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label="Rehacer" data-tooltip="Rehacer" onClick={handleRedo}>
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label={copy.redo} data-tooltip={copy.redo} onClick={handleRedo}>
             <Redo2 size={16} />
           </button>
         </div>
@@ -1171,7 +1191,7 @@ export function HandwrittenEditor({
           </aside>
         ) : null}
         <section className="flex min-w-0 flex-1 flex-col">
-          {navigationNotice&&<p role="status" className="shrink-0 px-3 py-2 text-xs text-ink-secondary">{navigationNotice}</p>}
+          {pageUnavailable&&<p role="status" className="shrink-0 px-3 py-2 text-xs text-ink-secondary">{copy.missingPage}</p>}
           <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-panel px-6 py-6">
             <div className="mx-auto flex w-max min-w-full flex-col items-center gap-6">
               {activePage ? (
@@ -1198,7 +1218,7 @@ export function HandwrittenEditor({
                       className="absolute inset-0 h-full w-full rounded-sm"
                       width={activePage.size.width}
                       height={activePage.size.height}
-                      aria-label={`Página manuscrita ${Math.max(1, activePageIndex + 1)}`}
+                      aria-label={preview.strokes.replace("{number}",String(Math.max(1, activePageIndex + 1)))}
                       onPointerDown={(event) => handlePointerDown(activePage, event)}
                       onPointerMove={(event) => handlePointerMove(activePage, event)}
                       onPointerUp={(event) => handlePointerUp(activePage, event)}
@@ -1242,9 +1262,9 @@ export function HandwrittenEditor({
       {pageOcr&&pageOcr.noteId===noteId&&<PageOcrDialog key={`${pageOcr.noteId}:${pageOcr.pageId}`} {...pageOcr} onBeforeOcr={onBeforeOcr} onApplyOcr={onApplyOcr} onOcrObserved={onOcrObserved} onClose={()=>setPageOcr(null)}/>}
       {pageTextReview&&<PageTranscriptionDialog key={`${pageTextReview.noteId}:${pageTextReview.pageId}`} pageNumber={pageTextReview.pageNumber} initialText={pageTextReview.baseText} currentText={pageTextReview.noteId===noteId?pageTranscription(content,pageTextReview.pageId):undefined} onClose={()=>setPageTextReview(null)} onApply={(text,baseText)=>{
         const latest=contentRef.current;
-        if(pageTextReview.noteId!==noteId||!latest)return "La nota activa cambió. El texto pendiente se conserva.";
+        if(pageTextReview.noteId!==noteId||!latest)return copy.noteChanged;
         try{commitChange(updatePageTranscription(latest,pageTextReview.pageId,baseText,text));return null;}
-        catch(error){return error instanceof Error?error.message:"No se pudo aplicar el texto. Se conserva el campo para revisar.";}
+        catch(error){return error instanceof PageTranscriptionError?pageText.errors[error.reason]:copy.applyError;}
       }}/>}
       {pageSettingsOpen && activePage ? (
         <SheetSettingsLayer
@@ -1542,13 +1562,14 @@ function ZoomSettingsLayer({
   onNavigate: (page: HandwrittenNotePage, event: ReactPointerEvent<HTMLDivElement>) => void;
   onThumbnailCanvas: (page: HandwrittenNotePage, canvas: HTMLCanvasElement | null) => void;
 }) {
+  const {editor:copy}=useHandwrittenCopy();
   return (
     <AnchoredConfigurationLayer
       anchorElement={anchorElement}
       boundaryElement={boundaryElement}
       preferredPlacement={preferredPlacement}
       width={320}
-      ariaLabel="Configurar zoom"
+      ariaLabel={copy.zoomSettings}
       onClose={onClose}
     >
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
@@ -1556,10 +1577,10 @@ function ZoomSettingsLayer({
             <ZoomIn size={16} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[12px] font-semibold text-ink-primary">Zoom</div>
+            <div className="truncate text-[12px] font-semibold text-ink-primary">{copy.zoom}</div>
             <div className="truncate text-[10px] text-ink-secondary">{zoomPercent}%</div>
           </div>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label="Cerrar configuración de zoom" onClick={onClose}>
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label={copy.closeZoom} onClick={onClose}>
             <X size={15} />
           </button>
         </div>
@@ -1577,7 +1598,7 @@ function ZoomSettingsLayer({
             </div>
           ) : null}
           <label className="flex h-10 items-center gap-2 rounded-md border border-line px-2 text-[10px] font-semibold uppercase text-ink-secondary">
-            Nivel
+            {copy.level}
             <input
               className="min-w-0 flex-1 accent-[rgb(var(--accent))]"
               type="range"
@@ -1585,7 +1606,7 @@ function ZoomSettingsLayer({
               max={ZOOM_MAX}
               value={zoomPercent}
               onChange={(event) => onZoomChange(Number(event.currentTarget.value))}
-              aria-label="Nivel de zoom"
+              aria-label={copy.zoomLevel}
             />
             <span className="w-10 text-right text-[11px] font-semibold tabular-nums text-ink-primary">{zoomPercent}%</span>
           </label>
@@ -1593,32 +1614,32 @@ function ZoomSettingsLayer({
             <button
               type="button"
               className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-line bg-white text-ink-secondary transition hover:border-orange-200 hover:bg-brand-hover hover:text-brand-orange"
-              aria-label="Ajustar en anchura"
-              data-tooltip="Ajustar en anchura"
+              aria-label={copy.fitWidth}
+              data-tooltip={copy.fitWidth}
               onClick={onFitWidth}
             >
               <ArrowLeftRight size={18} />
-              <span className="text-[10px] font-semibold">Ancho</span>
+              <span className="text-[10px] font-semibold">{copy.width}</span>
             </button>
             <button
               type="button"
               className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-line bg-white text-ink-secondary transition hover:border-orange-200 hover:bg-brand-hover hover:text-brand-orange"
-              aria-label="Ajustar en altura"
-              data-tooltip="Ajustar en altura"
+              aria-label={copy.fitHeight}
+              data-tooltip={copy.fitHeight}
               onClick={onFitHeight}
             >
               <ArrowUpDown size={18} />
-              <span className="text-[10px] font-semibold">Alto</span>
+              <span className="text-[10px] font-semibold">{copy.height}</span>
             </button>
             <button
               type="button"
               className="flex h-16 flex-col items-center justify-center gap-1 rounded-md border border-line bg-white text-ink-secondary transition hover:border-orange-200 hover:bg-brand-hover hover:text-brand-orange"
-              aria-label="Mostrar completo ajustado"
-              data-tooltip="Mostrar completo"
+              aria-label={copy.fitPage}
+              data-tooltip={copy.fitPage}
               onClick={onFitPage}
             >
               <Maximize2 size={18} />
-              <span className="text-[10px] font-semibold">Completo</span>
+              <span className="text-[10px] font-semibold">{copy.fullPage}</span>
             </button>
           </div>
         </div>
@@ -1653,6 +1674,7 @@ function PagesLayer({
   onNavigate: (page: HandwrittenNotePage, event: ReactPointerEvent<HTMLDivElement>) => void;
   onThumbnailCanvas: (page: HandwrittenNotePage, canvas: HTMLCanvasElement | null) => void;
 }) {
+  const {editor:copy}=useHandwrittenCopy();
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
   const [dropTargetPageId, setDropTargetPageId] = useState<string | null>(null);
 
@@ -1663,7 +1685,7 @@ function PagesLayer({
       preferredPlacement={preferredPlacement}
       width={420}
       className="flex max-h-[min(560px,calc(100vh-32px))] flex-col"
-      ariaLabel="Hojas de la nota"
+      ariaLabel={copy.pagesLabel}
       onClose={onClose}
     >
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
@@ -1671,13 +1693,13 @@ function PagesLayer({
             <Grid3X3 size={16} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[12px] font-semibold text-ink-primary">Hojas</div>
-            <div className="truncate text-[10px] text-ink-secondary">{pages.length} página(s)</div>
+            <div className="truncate text-[12px] font-semibold text-ink-primary">{copy.pages}</div>
+            <div className="truncate text-[10px] text-ink-secondary">{pages.length} {pages.length===1?copy.singlePage:copy.manyPages}</div>
           </div>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label="Añadir página" data-tooltip="Añadir página" onClick={onAddPage}>
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-brand-hover hover:text-brand-orange" aria-label={copy.addPage} data-tooltip={copy.addPage} onClick={onAddPage}>
             <FilePlus2 size={15} />
           </button>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label="Cerrar hojas" onClick={onClose}>
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label={copy.closePages} onClick={onClose}>
             <X size={15} />
           </button>
         </div>
@@ -1698,7 +1720,8 @@ function PagesLayer({
                   ].join(" ")}
                   role="button"
                   tabIndex={0}
-                  aria-label={`Página ${index + 1}`}
+                  aria-label={`${copy.page} ${index + 1}`}
+                  aria-current={selected?"page":undefined}
                   draggable
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = "move";
@@ -1773,11 +1796,12 @@ function HandwrittenPageThumbnail({
   onCanvas: (page: HandwrittenNotePage, canvas: HTMLCanvasElement | null) => void;
   onNavigate: (page: HandwrittenNotePage, event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
+  const {editor:copy}=useHandwrittenCopy();
   return (
     <div
       className="relative overflow-hidden rounded-[2px] border border-line bg-white shadow-[0_1px_3px_rgba(17,24,39,0.12)]"
       style={{ ...getScaledPageStyle(page, maxWidth, maxHeight), ...getThumbnailBackgroundStyle(page) }}
-      data-tooltip="Mover vista de la página"
+      data-tooltip={copy.movePageView}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         onNavigate(page, event);
@@ -1819,10 +1843,10 @@ function SheetSettingsLayer({
   onLayoutChange: (preset: HandwrittenPageSizePreset, orientation: HandwrittenPageOrientation) => void;
   onBackgroundChange: (background: HandwrittenPageBackground) => void;
 }) {
+  const {editor:copy}=useHandwrittenCopy();
   const currentPreset = PAGE_SIZE_PRESETS.some((preset) => preset.id === page.size.preset) ? page.size.preset : "A4";
   const currentOrientation = getPageOrientation(page);
-  const currentPresetLabel = PAGE_SIZE_PRESETS.find((preset) => preset.id === currentPreset)?.label ?? "DinA4";
-  const currentBackgroundLabel = PAGE_BACKGROUNDS.find((background) => background.id === page.background.type)?.label ?? "Blanco";
+  const currentBackgroundLabel = copy.backgrounds[page.background.type] ?? copy.backgrounds.blank;
 
   return (
     <AnchoredConfigurationLayer
@@ -1830,7 +1854,7 @@ function SheetSettingsLayer({
       boundaryElement={boundaryElement}
       preferredPlacement={preferredPlacement}
       width={360}
-      ariaLabel="Configurar hoja"
+      ariaLabel={copy.pageSettings}
       onClose={onClose}
     >
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
@@ -1838,10 +1862,10 @@ function SheetSettingsLayer({
             <Settings2 size={16} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[12px] font-semibold text-ink-primary">Hoja</div>
-            <div className="truncate text-[10px] text-ink-secondary">{currentPresetLabel} · {currentOrientation === "portrait" ? "Vertical" : "Horizontal"} · {currentBackgroundLabel}</div>
+            <div className="truncate text-[12px] font-semibold text-ink-primary">{copy.sheet}</div>
+            <div className="truncate text-[10px] text-ink-secondary">{currentPreset} · {copy.orientations[currentOrientation]} · {currentBackgroundLabel}</div>
           </div>
-          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label="Cerrar configuración de hoja" onClick={onClose}>
+          <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label={copy.closeSheet} onClick={onClose}>
             <X size={15} />
           </button>
         </div>
@@ -1856,7 +1880,7 @@ function SheetSettingsLayer({
             <div>
               <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-ink-secondary">
                 <Grid3X3 size={12} />
-                Formato
+                {copy.format}
               </div>
               <div className="grid grid-cols-4 gap-1">
                 {PAGE_SIZE_PRESETS.map((preset) => {
@@ -1865,17 +1889,18 @@ function SheetSettingsLayer({
                     <button
                       key={preset.id}
                       type="button"
+                      aria-pressed={selected}
                       className={["h-9 rounded-md border px-1.5 text-[11px] font-semibold transition", selected ? "border-brand-orange bg-brand-hover text-brand-orange" : "border-line bg-white text-ink-secondary hover:border-orange-200 hover:bg-panel hover:text-ink-primary"].join(" ")}
                       onClick={() => onLayoutChange(preset.id, currentOrientation)}
                     >
-                      {preset.label}
+                      {preset.id}
                     </button>
                   );
                 })}
               </div>
             </div>
             <div>
-              <div className="mb-1.5 text-[10px] font-semibold uppercase text-ink-secondary">Orientación</div>
+              <div className="mb-1.5 text-[10px] font-semibold uppercase text-ink-secondary">{copy.orientation}</div>
               <div className="grid grid-cols-2 gap-1">
                 {PAGE_ORIENTATIONS.map((orientation) => {
                   const selected = currentOrientation === orientation.id;
@@ -1883,18 +1908,19 @@ function SheetSettingsLayer({
                     <button
                       key={orientation.id}
                       type="button"
+                      aria-pressed={selected}
                       className={["flex h-10 items-center justify-center gap-2 rounded-md border px-2 text-[11px] font-semibold transition", selected ? "border-brand-orange bg-brand-hover text-brand-orange" : "border-line bg-white text-ink-secondary hover:border-orange-200 hover:bg-panel hover:text-ink-primary"].join(" ")}
                       onClick={() => onLayoutChange(currentPreset, orientation.id)}
                     >
                       <span className={["rounded-[2px] border", orientation.id === "portrait" ? "h-5 w-3.5" : "h-3.5 w-5", selected ? "border-brand-orange" : "border-ink-secondary/60"].join(" ")} />
-                      {orientation.label}
+                      {copy.orientations[orientation.id]}
                     </button>
                   );
                 })}
               </div>
             </div>
             <div>
-              <div className="mb-1.5 text-[10px] font-semibold uppercase text-ink-secondary">Plantilla</div>
+              <div className="mb-1.5 text-[10px] font-semibold uppercase text-ink-secondary">{copy.paper}</div>
               <div className="grid grid-cols-5 gap-1">
                 {PAGE_BACKGROUNDS.map((background) => {
                   const selected = page.background.type === background.id;
@@ -1903,8 +1929,9 @@ function SheetSettingsLayer({
                       key={background.id}
                       type="button"
                       className={["h-10 rounded-md border p-1 transition", selected ? "border-brand-orange bg-brand-hover ring-1 ring-brand-orange" : "border-line bg-white hover:border-orange-200 hover:bg-panel"].join(" ")}
-                      aria-label={background.label}
-                      data-tooltip={background.label}
+                      aria-label={copy.backgrounds[background.id]}
+                      aria-pressed={selected}
+                      data-tooltip={copy.backgrounds[background.id]}
                       onClick={() => onBackgroundChange(background.id)}
                     >
                       <span className="block h-full rounded-[2px] border border-line bg-white" style={getBackgroundPreviewStyle(background.id)} />
@@ -1934,10 +1961,8 @@ function EraserConfigurationLayer({
   onClose: () => void;
   onChange: (patch: Partial<HandwrittenEraserConfig>) => void;
 }) {
-  const modeOptions: Array<{ id: HandwrittenEraserConfig["mode"]; label: string }> = [
-    { id: "stroke", label: "Trazo" },
-    { id: "partial", label: "Parcial" },
-  ];
+  const {editor:copy}=useHandwrittenCopy();
+  const modes = ["stroke","partial"] as const;
 
   return (
     <AnchoredConfigurationLayer
@@ -1945,7 +1970,7 @@ function EraserConfigurationLayer({
       boundaryElement={boundaryElement}
       preferredPlacement={preferredPlacement}
       width={292}
-      ariaLabel="Configurar borrador"
+      ariaLabel={copy.eraserSettings}
       onClose={onClose}
     >
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
@@ -1953,26 +1978,27 @@ function EraserConfigurationLayer({
           <Eraser size={16} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12px] font-semibold text-ink-primary">Borrador</div>
-          <div className="truncate text-[10px] text-ink-secondary">{eraser.width}px · {eraser.mode === "partial" ? "Parcial" : "Trazo"}</div>
+          <div className="truncate text-[12px] font-semibold text-ink-primary">{copy.eraser}</div>
+          <div className="truncate text-[10px] text-ink-secondary">{eraser.width}px · {copy.eraserModes[eraser.mode]}</div>
         </div>
-        <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label="Cerrar configuración de borrador" onClick={onClose}>
+        <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-panel hover:text-ink-primary" aria-label={copy.closeEraser} onClick={onClose}>
           <X size={15} />
         </button>
       </div>
       <div className="space-y-2 px-3 py-3">
-        <RangeControl label="Anchura" min={MIN_ERASER_WIDTH} max={MAX_ERASER_WIDTH} value={eraser.width} onChange={(width) => onChange({ width })} />
+        <RangeControl label={copy.eraserWidth} min={MIN_ERASER_WIDTH} max={MAX_ERASER_WIDTH} value={eraser.width} onChange={(width) => onChange({ width })} />
         <div className="grid grid-cols-2 gap-1 rounded-md border border-line bg-panel p-1">
-          {modeOptions.map((mode) => {
-            const selected = eraser.mode === mode.id;
+          {modes.map((mode) => {
+            const selected = eraser.mode === mode;
             return (
               <button
-                key={mode.id}
+                key={mode}
                 type="button"
+                aria-pressed={selected}
                 className={["h-8 rounded-[5px] text-[11px] font-semibold transition", selected ? "bg-white text-brand-orange shadow-sm" : "text-ink-secondary hover:bg-white/70 hover:text-ink-primary"].join(" ")}
-                onClick={() => onChange({ mode: mode.id })}
+                onClick={() => onChange({ mode })}
               >
-                {mode.label}
+                {copy.eraserModes[mode]}
               </button>
             );
           })}
@@ -2014,6 +2040,7 @@ function PencilConfigurationLayer({
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
 }) {
+  const {editor:copy}=useHandwrittenCopy();
   const Icon = pencilTypeIcons[pencil.type ?? "pen"];
   const canDelete = pencilCount > MIN_PENCIL_PRESETS;
 
@@ -2034,7 +2061,7 @@ function PencilConfigurationLayer({
       preferredPlacement={preferredPlacement}
       width={360}
       backdropClassName="bg-black/10"
-      ariaLabel="Configurar pencil"
+      ariaLabel={copy.penSettings}
       onClose={onClose}
     >
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
@@ -2046,23 +2073,23 @@ function PencilConfigurationLayer({
             <input
               className="h-6 w-full rounded-md border border-transparent px-1 text-[12px] font-semibold text-ink-primary outline-none hover:border-line focus:border-brand-orange"
               value={pencil.label}
-              aria-label="Nombre del pencil"
+              aria-label={copy.penName}
               onChange={(event) => onChange({ label: event.currentTarget.value })}
             />
             <div className="flex items-center gap-2 px-1 text-[10px] text-ink-secondary">
-              <span>{getPencilTypeLabel(pencil.type)}</span>
+              <span>{copy.penTypes[pencil.type ?? "pen"]}</span>
               <span className="h-1.5 w-20 rounded-full" style={{ backgroundColor: pencil.color, opacity: pencil.opacity }} />
             </div>
           </div>
           {canDelete ? (
-            <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-red-50 hover:text-red-600" aria-label="Eliminar pencil" data-tooltip="Eliminar pencil" onClick={onRequestDelete}>
+            <button className="grid h-8 w-8 place-items-center rounded-md text-ink-secondary hover:bg-red-50 hover:text-red-600" aria-label={copy.deletePen} data-tooltip={copy.deletePen} onClick={onRequestDelete}>
               <Trash2 size={15} />
             </button>
           ) : null}
         </div>
         <div className="space-y-2 px-3 py-3">
           <div>
-            <div className="mb-1 text-[10px] font-semibold text-ink-secondary">Tipo</div>
+            <div className="mb-1 text-[10px] font-semibold text-ink-secondary">{copy.type}</div>
             <div className="grid grid-cols-5 gap-1">
               {PENCIL_TYPES.map((type) => {
                 const TypeIcon = pencilTypeIcons[type.id];
@@ -2072,18 +2099,19 @@ function PencilConfigurationLayer({
                     key={type.id}
                     className={["flex h-12 flex-col items-center justify-center gap-0.5 rounded-md border px-1 text-center transition", selected ? "border-brand-orange bg-brand-hover text-brand-orange" : "border-line bg-white text-ink-secondary hover:border-orange-200 hover:bg-panel hover:text-ink-primary"].join(" ")}
                     type="button"
-                    aria-label={type.label}
+                    aria-label={copy.penTypes[type.id]}
+                    aria-pressed={selected}
                     onClick={() => handleTypeChange(type.id)}
                   >
                     <TypeIcon size={16} />
-                    <span className="max-w-full truncate text-[9px] font-semibold leading-none">{type.label}</span>
+                    <span className="max-w-full truncate text-[9px] font-semibold leading-none">{copy.penTypes[type.id]}</span>
                   </button>
                 );
               })}
             </div>
           </div>
           <div>
-            <div className="mb-1 text-[10px] font-semibold text-ink-secondary">Color</div>
+            <div className="mb-1 text-[10px] font-semibold text-ink-secondary">{copy.color}</div>
             <div className="grid grid-cols-8 gap-1">
               {pencilColorSwatches.map((swatch) => {
                 const selected = pencil.color.toLowerCase() === swatch.value.toLowerCase();
@@ -2093,8 +2121,9 @@ function PencilConfigurationLayer({
                     type="button"
                     className={["relative h-7 rounded-md border transition", selected ? "border-brand-orange ring-1 ring-brand-orange" : "border-line hover:border-orange-200"].join(" ")}
                     style={{ backgroundColor: swatch.value }}
-                    aria-label={swatch.label}
-                    data-tooltip={swatch.label}
+                    aria-label={copy.colors[swatch.id]}
+                    aria-pressed={selected}
+                    data-tooltip={copy.colors[swatch.id]}
                     onClick={() => onChange({ color: swatch.value })}
                   >
                     {selected ? (
@@ -2107,7 +2136,7 @@ function PencilConfigurationLayer({
               })}
             </div>
             <label className="mt-1.5 flex h-8 cursor-default items-center justify-between rounded-md border border-line px-2 text-[10px] font-semibold text-ink-secondary">
-              Color propio
+              {copy.customColor}
               <span className="flex items-center gap-2 text-[11px] font-medium normal-case text-ink-primary">
                 {pencil.color.toUpperCase()}
                 <input
@@ -2120,11 +2149,11 @@ function PencilConfigurationLayer({
             </label>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
-            <RangeControl label="Grosor" min={1} max={38} value={Math.round(pencil.width)} onChange={(width) => onChange({ width })} />
-            <RangeControl label="Opacidad" min={10} max={100} value={Math.round(pencil.opacity * 100)} onChange={(opacity) => onChange({ opacity: opacity / 100 })} />
-            <RangeControl label="Suavizado" min={0} max={100} value={Math.round(pencil.smoothing * 100)} onChange={(smoothing) => onChange({ smoothing: smoothing / 100 })} />
+            <RangeControl label={copy.thickness} min={1} max={38} value={Math.round(pencil.width)} onChange={(width) => onChange({ width })} />
+            <RangeControl label={copy.opacity} min={10} max={100} value={Math.round(pencil.opacity * 100)} onChange={(opacity) => onChange({ opacity: opacity / 100 })} />
+            <RangeControl label={copy.smoothing} min={0} max={100} value={Math.round(pencil.smoothing * 100)} onChange={(smoothing) => onChange({ smoothing: smoothing / 100 })} />
             <label className="flex h-8 cursor-default items-center justify-between rounded-md border border-line px-2 text-[10px] font-semibold text-ink-secondary">
-              Presión
+              {copy.pressure}
               <input
                 type="checkbox"
                 className="cursor-default accent-[rgb(var(--accent))]"
@@ -2134,20 +2163,20 @@ function PencilConfigurationLayer({
             </label>
             {pencil.pressure ? (
               <div className="col-span-2">
-                <RangeControl label="Sensibilidad" min={0} max={100} value={Math.round((pencil.pressureSensitivity ?? 0.55) * 100)} onChange={(pressureSensitivity) => onChange({ pressureSensitivity: pressureSensitivity / 100 })} />
+                <RangeControl label={copy.sensitivity} min={0} max={100} value={Math.round((pencil.pressureSensitivity ?? 0.55) * 100)} onChange={(pressureSensitivity) => onChange({ pressureSensitivity: pressureSensitivity / 100 })} />
               </div>
             ) : null}
           </div>
           <PencilPreviewSample pencil={pencil} />
           {pendingDelete ? (
             <div className="rounded-md border border-red-200 bg-red-50 p-2">
-              <div className="mb-2 text-[11px] font-semibold text-red-700">Eliminar este pencil?</div>
+              <div className="mb-2 text-[11px] font-semibold text-red-700">{copy.confirmDeletePen}</div>
               <div className="flex justify-end gap-2">
                 <button className="h-7 rounded-md border border-line bg-white px-2 text-[11px] font-medium text-ink-secondary hover:bg-panel" onClick={onCancelDelete}>
-                  Cancelar
+                  {copy.cancel}
                 </button>
                 <button className="h-7 rounded-md bg-red-600 px-2 text-[11px] font-semibold text-white hover:bg-red-700" onClick={onConfirmDelete}>
-                  Eliminar
+                  {copy.delete}
                 </button>
               </div>
             </div>
@@ -2411,6 +2440,7 @@ function RangeControl({ label, min, max, value, onChange }: { label: string; min
 }
 
 function PencilPreviewSample({ pencil }: { pencil: HandwrittenToolPreset }) {
+  const {editor:copy}=useHandwrittenCopy();
   const samplePath = buildStrokeOutlinePath(PENCIL_PREVIEW_POINTS, {
     width: getPreviewStrokeWidth(pencil),
     smoothing: pencil.smoothing,
@@ -2423,10 +2453,10 @@ function PencilPreviewSample({ pencil }: { pencil: HandwrittenToolPreset }) {
   return (
     <div className="rounded-md border border-line bg-panel px-2 py-1.5">
       <div className="mb-1 flex items-center justify-between text-[10px] font-semibold text-ink-secondary">
-        <span>Muestra</span>
-        <span className="font-medium text-ink-secondary">{getPencilTypeLabel(pencil.type)}</span>
+        <span>{copy.sample}</span>
+        <span className="font-medium text-ink-secondary">{copy.penTypes[pencil.type ?? "pen"]}</span>
       </div>
-      <svg className="block h-12 w-full rounded bg-white" viewBox="0 0 300 54" role="img" aria-label="Muestra del pencil configurado">
+      <svg className="block h-12 w-full rounded bg-white" viewBox="0 0 300 54" role="img" aria-label={copy.sampleLabel}>
         {isPencil ? (
           <defs>
             <clipPath id="pencil-preview-clip">
